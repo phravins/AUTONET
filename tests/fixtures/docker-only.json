@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "interfaces": [
+    { "name": "lo", "index": 1, "kind": "loopback", "state": "unknown",
+      "addresses": [ { "ip": "127.0.0.1", "family": "ipv4", "prefix_len": 8, "scope": "loopback" } ] },
+    { "name": "docker0", "index": 4, "kind": "container", "state": "up",
+      "addresses": [ { "ip": "172.17.0.1", "family": "ipv4", "prefix_len": 16, "scope": "private" } ] },
+    { "name": "br-18642d3532b2", "index": 5, "kind": "container", "state": "up",
+      "addresses": [ { "ip": "172.20.0.1", "family": "ipv4", "prefix_len": 16, "scope": "private" } ] },
+    { "name": "virbr0", "index": 6, "kind": "virtual", "state": "up",
+      "addresses": [ { "ip": "192.168.122.1", "family": "ipv4", "prefix_len": 24, "scope": "private" } ] }
+  ],
+  "routes": []
+}

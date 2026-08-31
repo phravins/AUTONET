@@ -1,0 +1,653 @@
+{
+  "schema_version": 1,
+  "interfaces": [
+    {
+      "name": "lo",
+      "index": 1,
+      "kind": "loopback",
+      "state": "unknown",
+      "flags": {
+        "up": true,
+        "running": true,
+        "loopback": true,
+        "broadcast": false,
+        "point_to_point": false,
+        "multicast": false
+      },
+      "mac": null,
+      "mtu": 65536,
+      "addresses": [
+        {
+          "ip": "127.0.0.1",
+          "family": "ipv4",
+          "prefix_len": 8,
+          "scope": "loopback",
+          "is_temporary": false
+        },
+        {
+          "ip": "::1",
+          "family": "ipv6",
+          "prefix_len": 128,
+          "scope": "loopback",
+          "is_temporary": false
+        }
+      ]
+    },
+    {
+      "name": "eno2",
+      "index": 2,
+      "kind": "ethernet",
+      "state": "down",
+      "flags": {
+        "up": true,
+        "running": false,
+        "loopback": false,
+        "broadcast": true,
+        "point_to_point": false,
+        "multicast": true
+      },
+      "mac": "02:00:00:00:00:02",
+      "mtu": 1500,
+      "addresses": []
+    },
+    {
+      "name": "wlo1",
+      "index": 3,
+      "kind": "wireless",
+      "state": "up",
+      "flags": {
+        "up": true,
+        "running": true,
+        "loopback": false,
+        "broadcast": true,
+        "point_to_point": false,
+        "multicast": true
+      },
+      "mac": "02:00:00:00:00:03",
+      "mtu": 1500,
+      "addresses": [
+        {
+          "ip": "192.168.1.101",
+          "family": "ipv4",
+          "prefix_len": 24,
+          "scope": "private",
+          "is_temporary": false
+        },
+        {
+          "ip": "2606:4700:4700::1111",
+          "family": "ipv6",
+          "prefix_len": 64,
+          "scope": "global",
+          "is_temporary": false
+        },
+        {
+          "ip": "fe80::a00:27ff:fe00:0001",
+          "family": "ipv6",
+          "prefix_len": 64,
+          "scope": "link_local",
+          "is_temporary": false
+        }
+      ]
+    },
+    {
+      "name": "virbr0",
+      "index": 4,
+      "kind": "virtual",
+      "state": "down",
+      "flags": {
+        "up": true,
+        "running": false,
+        "loopback": false,
+        "broadcast": true,
+        "point_to_point": false,
+        "multicast": true
+      },
+      "mac": "02:00:00:00:00:04",
+      "mtu": 1500,
+      "addresses": [
+        {
+          "ip": "192.168.122.1",
+          "family": "ipv4",
+          "prefix_len": 24,
+          "scope": "private",
+          "is_temporary": false
+        }
+      ]
+    },
+    {
+      "name": "br-18642d3532b2",
+      "index": 5,
+      "kind": "container",
+      "state": "up",
+      "flags": {
+        "up": true,
+        "running": true,
+        "loopback": false,
+        "broadcast": true,
+        "point_to_point": false,
+        "multicast": true
+      },
+      "mac": "02:00:00:00:00:05",
+      "mtu": 1500,
+      "addresses": [
+        {
+          "ip": "172.20.0.1",
+          "family": "ipv4",
+          "prefix_len": 16,
+          "scope": "private",
+          "is_temporary": false
+        },
+        {
+          "ip": "fe80::a00:27ff:fe00:0002",
+          "family": "ipv6",
+          "prefix_len": 64,
+          "scope": "link_local",
+          "is_temporary": false
+        }
+      ]
+    },
+    {
+      "name": "br-1c8141f6b1d9",
+      "index": 6,
+      "kind": "container",
+      "state": "down",
+      "flags": {
+        "up": true,
+        "running": false,
+        "loopback": false,
+        "broadcast": true,
+        "point_to_point": false,
+        "multicast": true
+      },
+      "mac": "02:00:00:00:00:06",
+      "mtu": 1500,
+      "addresses": [
+        {
+          "ip": "172.24.0.1",
+          "family": "ipv4",
+          "prefix_len": 16,
+          "scope": "private",
+          "is_temporary": false
+        }
+      ]
+    },
+    {
+      "name": "br-471fd10199e4",
+      "index": 7,
+      "kind": "container",
+      "state": "up",
+      "flags": {
+        "up": true,
+        "running": true,
+        "loopback": false,
+        "broadcast": true,
+        "point_to_point": false,
+        "multicast": true
+      },
+      "mac": "02:00:00:00:00:07",
+      "mtu": 1500,
+      "addresses": [
+        {
+          "ip": "172.18.0.1",
+          "family": "ipv4",
+          "prefix_len": 16,
+          "scope": "private",
+          "is_temporary": false
+        },
+        {
+          "ip": "fe80::a00:27ff:fe00:0003",
+          "family": "ipv6",
+          "prefix_len": 64,
+          "scope": "link_local",
+          "is_temporary": false
+        }
+      ]
+    },
+    {
+      "name": "br-6ba7b650c5c9",
+      "index": 8,
+      "kind": "container",
+      "state": "up",
+      "flags": {
+        "up": true,
+        "running": true,
+        "loopback": false,
+        "broadcast": true,
+        "point_to_point": false,
+        "multicast": true
+      },
+      "mac": "02:00:00:00:00:08",
+      "mtu": 1500,
+      "addresses": [
+        {
+          "ip": "172.22.0.1",
+          "family": "ipv4",
+          "prefix_len": 16,
+          "scope": "private",
+          "is_temporary": false
+        },
+        {
+          "ip": "fe80::a00:27ff:fe00:0004",
+          "family": "ipv6",
+          "prefix_len": 64,
+          "scope": "link_local",
+          "is_temporary": false
+        }
+      ]
+    },
+    {
+      "name": "br-a26ca7eec231",
+      "index": 9,
+      "kind": "container",
+      "state": "up",
+      "flags": {
+        "up": true,
+        "running": true,
+        "loopback": false,
+        "broadcast": true,
+        "point_to_point": false,
+        "multicast": true
+      },
+      "mac": "02:00:00:00:00:09",
+      "mtu": 1500,
+      "addresses": [
+        {
+          "ip": "172.19.0.1",
+          "family": "ipv4",
+          "prefix_len": 16,
+          "scope": "private",
+          "is_temporary": false
+        },
+        {
+          "ip": "fe80::a00:27ff:fe00:0005",
+          "family": "ipv6",
+          "prefix_len": 64,
+          "scope": "link_local",
+          "is_temporary": false
+        }
+      ]
+    },
+    {
+      "name": "br-e65f9d13bcf5",
+      "index": 10,
+      "kind": "container",
+      "state": "up",
+      "flags": {
+        "up": true,
+        "running": true,
+        "loopback": false,
+        "broadcast": true,
+        "point_to_point": false,
+        "multicast": true
+      },
+      "mac": "02:00:00:00:00:0a",
+      "mtu": 1500,
+      "addresses": [
+        {
+          "ip": "172.23.0.1",
+          "family": "ipv4",
+          "prefix_len": 16,
+          "scope": "private",
+          "is_temporary": false
+        },
+        {
+          "ip": "fe80::a00:27ff:fe00:0006",
+          "family": "ipv6",
+          "prefix_len": 64,
+          "scope": "link_local",
+          "is_temporary": false
+        }
+      ]
+    },
+    {
+      "name": "br-e9445c489a3f",
+      "index": 11,
+      "kind": "container",
+      "state": "up",
+      "flags": {
+        "up": true,
+        "running": true,
+        "loopback": false,
+        "broadcast": true,
+        "point_to_point": false,
+        "multicast": true
+      },
+      "mac": "02:00:00:00:00:0b",
+      "mtu": 1500,
+      "addresses": [
+        {
+          "ip": "172.21.0.1",
+          "family": "ipv4",
+          "prefix_len": 16,
+          "scope": "private",
+          "is_temporary": false
+        },
+        {
+          "ip": "fe80::a00:27ff:fe00:0007",
+          "family": "ipv6",
+          "prefix_len": 64,
+          "scope": "link_local",
+          "is_temporary": false
+        }
+      ]
+    },
+    {
+      "name": "docker0",
+      "index": 12,
+      "kind": "container",
+      "state": "down",
+      "flags": {
+        "up": true,
+        "running": false,
+        "loopback": false,
+        "broadcast": true,
+        "point_to_point": false,
+        "multicast": true
+      },
+      "mac": "02:00:00:00:00:0c",
+      "mtu": 1500,
+      "addresses": [
+        {
+          "ip": "172.17.0.1",
+          "family": "ipv4",
+          "prefix_len": 16,
+          "scope": "private",
+          "is_temporary": false
+        }
+      ]
+    },
+    {
+      "name": "veth7faf9d0",
+      "index": 13,
+      "kind": "container",
+      "state": "up",
+      "flags": {
+        "up": true,
+        "running": true,
+        "loopback": false,
+        "broadcast": true,
+        "point_to_point": false,
+        "multicast": true
+      },
+      "mac": "02:00:00:00:00:0d",
+      "mtu": 1500,
+      "addresses": [
+        {
+          "ip": "fe80::a00:27ff:fe00:0008",
+          "family": "ipv6",
+          "prefix_len": 64,
+          "scope": "link_local",
+          "is_temporary": false
+        }
+      ]
+    },
+    {
+      "name": "veth8340f4f",
+      "index": 15,
+      "kind": "container",
+      "state": "up",
+      "flags": {
+        "up": true,
+        "running": true,
+        "loopback": false,
+        "broadcast": true,
+        "point_to_point": false,
+        "multicast": true
+      },
+      "mac": "02:00:00:00:00:0f",
+      "mtu": 1500,
+      "addresses": [
+        {
+          "ip": "fe80::a00:27ff:fe00:0009",
+          "family": "ipv6",
+          "prefix_len": 64,
+          "scope": "link_local",
+          "is_temporary": false
+        }
+      ]
+    },
+    {
+      "name": "veth4f732fa",
+      "index": 16,
+      "kind": "container",
+      "state": "up",
+      "flags": {
+        "up": true,
+        "running": true,
+        "loopback": false,
+        "broadcast": true,
+        "point_to_point": false,
+        "multicast": true
+      },
+      "mac": "02:00:00:00:00:10",
+      "mtu": 1500,
+      "addresses": [
+        {
+          "ip": "fe80::a00:27ff:fe00:000a",
+          "family": "ipv6",
+          "prefix_len": 64,
+          "scope": "link_local",
+          "is_temporary": false
+        }
+      ]
+    },
+    {
+      "name": "veth3e42c13",
+      "index": 17,
+      "kind": "container",
+      "state": "up",
+      "flags": {
+        "up": true,
+        "running": true,
+        "loopback": false,
+        "broadcast": true,
+        "point_to_point": false,
+        "multicast": true
+      },
+      "mac": "02:00:00:00:00:11",
+      "mtu": 1500,
+      "addresses": [
+        {
+          "ip": "fe80::a00:27ff:fe00:000b",
+          "family": "ipv6",
+          "prefix_len": 64,
+          "scope": "link_local",
+          "is_temporary": false
+        }
+      ]
+    },
+    {
+      "name": "vethfee2a9e",
+      "index": 18,
+      "kind": "container",
+      "state": "up",
+      "flags": {
+        "up": true,
+        "running": true,
+        "loopback": false,
+        "broadcast": true,
+        "point_to_point": false,
+        "multicast": true
+      },
+      "mac": "02:00:00:00:00:12",
+      "mtu": 1500,
+      "addresses": [
+        {
+          "ip": "fe80::a00:27ff:fe00:000c",
+          "family": "ipv6",
+          "prefix_len": 64,
+          "scope": "link_local",
+          "is_temporary": false
+        }
+      ]
+    },
+    {
+      "name": "veth6931ef0",
+      "index": 20,
+      "kind": "container",
+      "state": "up",
+      "flags": {
+        "up": true,
+        "running": true,
+        "loopback": false,
+        "broadcast": true,
+        "point_to_point": false,
+        "multicast": true
+      },
+      "mac": "02:00:00:00:00:14",
+      "mtu": 1500,
+      "addresses": [
+        {
+          "ip": "fe80::a00:27ff:fe00:000d",
+          "family": "ipv6",
+          "prefix_len": 64,
+          "scope": "link_local",
+          "is_temporary": false
+        }
+      ]
+    },
+    {
+      "name": "vethb6c2252",
+      "index": 21,
+      "kind": "container",
+      "state": "up",
+      "flags": {
+        "up": true,
+        "running": true,
+        "loopback": false,
+        "broadcast": true,
+        "point_to_point": false,
+        "multicast": true
+      },
+      "mac": "02:00:00:00:00:15",
+      "mtu": 1500,
+      "addresses": [
+        {
+          "ip": "fe80::a00:27ff:fe00:000e",
+          "family": "ipv6",
+          "prefix_len": 64,
+          "scope": "link_local",
+          "is_temporary": false
+        }
+      ]
+    },
+    {
+      "name": "vethe7d2b90",
+      "index": 22,
+      "kind": "container",
+      "state": "up",
+      "flags": {
+        "up": true,
+        "running": true,
+        "loopback": false,
+        "broadcast": true,
+        "point_to_point": false,
+        "multicast": true
+      },
+      "mac": "02:00:00:00:00:16",
+      "mtu": 1500,
+      "addresses": [
+        {
+          "ip": "fe80::a00:27ff:fe00:000f",
+          "family": "ipv6",
+          "prefix_len": 64,
+          "scope": "link_local",
+          "is_temporary": false
+        }
+      ]
+    },
+    {
+      "name": "vethcec4639",
+      "index": 23,
+      "kind": "container",
+      "state": "up",
+      "flags": {
+        "up": true,
+        "running": true,
+        "loopback": false,
+        "broadcast": true,
+        "point_to_point": false,
+        "multicast": true
+      },
+      "mac": "02:00:00:00:00:17",
+      "mtu": 1500,
+      "addresses": [
+        {
+          "ip": "fe80::a00:27ff:fe00:0010",
+          "family": "ipv6",
+          "prefix_len": 64,
+          "scope": "link_local",
+          "is_temporary": false
+        }
+      ]
+    },
+    {
+      "name": "veth83844f0",
+      "index": 24,
+      "kind": "container",
+      "state": "up",
+      "flags": {
+        "up": true,
+        "running": true,
+        "loopback": false,
+        "broadcast": true,
+        "point_to_point": false,
+        "multicast": true
+      },
+      "mac": "02:00:00:00:00:18",
+      "mtu": 1500,
+      "addresses": [
+        {
+          "ip": "fe80::a00:27ff:fe00:0011",
+          "family": "ipv6",
+          "prefix_len": 64,
+          "scope": "link_local",
+          "is_temporary": false
+        }
+      ]
+    },
+    {
+      "name": "vethe240c37",
+      "index": 25,
+      "kind": "container",
+      "state": "up",
+      "flags": {
+        "up": true,
+        "running": true,
+        "loopback": false,
+        "broadcast": true,
+        "point_to_point": false,
+        "multicast": true
+      },
+      "mac": "02:00:00:00:00:19",
+      "mtu": 1500,
+      "addresses": [
+        {
+          "ip": "fe80::a00:27ff:fe00:0012",
+          "family": "ipv6",
+          "prefix_len": 64,
+          "scope": "link_local",
+          "is_temporary": false
+        }
+      ]
+    }
+  ],
+  "routes": [
+    {
+      "destination": "0.0.0.0/0",
+      "gateway": "192.168.1.1",
+      "interface_index": 3,
+      "metric": 600,
+      "family": "ipv4",
+      "preferred_source": "192.168.1.101"
+    },
+    {
+      "destination": "::/0",
+      "gateway": "fe80::1",
+      "interface_index": 3,
+      "metric": 600,
+      "family": "ipv6",
+      "preferred_source": null
+    }
+  ]
+}

@@ -1,0 +1,32 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/autonet-core",
+    "crates/autonet-platform",
+    "crates/autonet-cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.82"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/osworks/autonet"
+authors = ["AutoNet contributors"]
+
+[workspace.dependencies]
+autonet-core = { path = "crates/autonet-core", version = "0.1.0" }
+autonet-platform = { path = "crates/autonet-platform", version = "0.1.0" }
+
+anyhow = "1"
+clap = { version = "4", features = ["derive", "wrap_help"] }
+owo-colors = "4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+toml = "0.8"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true

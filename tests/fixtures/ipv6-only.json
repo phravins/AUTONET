@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "interfaces": [
+    { "name": "lo", "index": 1, "kind": "loopback", "state": "unknown",
+      "addresses": [ { "ip": "::1", "family": "ipv6", "prefix_len": 128, "scope": "loopback" } ] },
+    { "name": "eno1", "index": 2, "kind": "ethernet", "state": "up",
+      "addresses": [
+        { "ip": "2606:4700:4700::1111", "family": "ipv6", "prefix_len": 64, "scope": "global" },
+        { "ip": "2606:4700:4700::9999", "family": "ipv6", "prefix_len": 64, "scope": "global", "is_temporary": true },
+        { "ip": "fe80::a00:27ff:fe00:0001", "family": "ipv6", "prefix_len": 64, "scope": "link_local" }
+      ] }
+  ],
+  "routes": [
+    { "destination": "::/0", "gateway": "fe80::1", "interface_index": 2,
+      "metric": 100, "family": "ipv6", "preferred_source": null }
+  ]
+}

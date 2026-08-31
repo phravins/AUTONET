@@ -1,0 +1,22 @@
+[package]
+name = "autonet-platform"
+description = "Operating-system backends that build an AutoNet NetworkState"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+autonet-core = { workspace = true }
+thiserror = { workspace = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+rtnetlink = "0.23"
+netlink-packet-route = "0.33"
+tokio = { version = "1", features = ["rt", "net", "macros"] }
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
+
+[dev-dependencies]
+serde_json = { workspace = true }

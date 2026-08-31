@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "interfaces": [
+    { "name": "lo", "index": 1, "kind": "loopback", "state": "unknown",
+      "addresses": [ { "ip": "127.0.0.1", "family": "ipv4", "prefix_len": 8, "scope": "loopback" } ] },
+    { "name": "eno1", "index": 2, "kind": "ethernet", "state": "down", "addresses": [] },
+    { "name": "wlo1", "index": 3, "kind": "wireless", "state": "down",
+      "addresses": [ { "ip": "169.254.12.34", "family": "ipv4", "prefix_len": 16, "scope": "link_local" } ] }
+  ],
+  "routes": []
+}

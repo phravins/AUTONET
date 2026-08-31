@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "interfaces": [
+    { "name": "lo", "index": 1, "kind": "loopback", "state": "unknown",
+      "addresses": [
+        { "ip": "127.0.0.1", "family": "ipv4", "prefix_len": 8, "scope": "loopback" },
+        { "ip": "::1", "family": "ipv6", "prefix_len": 128, "scope": "loopback" }
+      ] }
+  ],
+  "routes": []
+}

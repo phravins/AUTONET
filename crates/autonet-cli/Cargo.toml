@@ -1,0 +1,28 @@
+[package]
+name = "autonet-cli"
+description = "The AutoNet command-line interface"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+# The crate is `autonet-cli` so the workspace reads consistently, but the
+# binary people type is `autonet`.
+[[bin]]
+name = "autonet"
+path = "src/main.rs"
+
+[dependencies]
+autonet-core = { workspace = true }
+autonet-platform = { workspace = true }
+anyhow = { workspace = true }
+clap = { workspace = true }
+owo-colors = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+assert_cmd = "2"
+predicates = "3"

@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "interfaces": [
+    { "name": "lo", "index": 1, "kind": "loopback", "state": "unknown",
+      "addresses": [ { "ip": "127.0.0.1", "family": "ipv4", "prefix_len": 8, "scope": "loopback" } ] },
+    { "name": "wlo1", "index": 3, "kind": "wireless", "state": "up",
+      "addresses": [ { "ip": "192.168.1.101", "family": "ipv4", "prefix_len": 24, "scope": "private" } ] },
+    { "name": "wg0", "index": 8, "kind": "vpn", "state": "unknown",
+      "addresses": [ { "ip": "10.8.0.2", "family": "ipv4", "prefix_len": 24, "scope": "private" } ] }
+  ],
+  "routes": [
+    { "destination": "0.0.0.0/0", "gateway": "192.168.1.1", "interface_index": 3,
+      "metric": 600, "family": "ipv4", "preferred_source": "192.168.1.101" },
+    { "destination": "0.0.0.0/0", "gateway": "10.8.0.1", "interface_index": 8,
+      "metric": 50, "family": "ipv4", "preferred_source": "10.8.0.2" }
+  ]
+}
