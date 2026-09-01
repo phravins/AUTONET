@@ -181,3 +181,83 @@ fn query(family: Family, error: io::Error) -> PlatformError {
     };
     PlatformError::query(operation, error)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{dump, Family};
+    use crate::rtparse;
+
+    /// Cross-check `rtm_index` against the `RTA_IFP` sockaddr on a live table.
+    ///
+    /// # Why this is not in `tests/live.rs`
+    ///
+    /// It cannot be. `Route` models a single interface index, so `RTA_IFP` is
+    /// consumed inside [`crate::rtparse::routes`] and never crosses the
+    /// platform boundary — an integration test has no way to see the second
+    /// number, which is why this is the one live test that lives in the crate.
+    /// It carries the same `#[ignore]` marking as the rest and runs under the
+    /// same command:
+    ///
+    /// ```sh
+    /// cargo test -p autonet-platform -- --ignored --nocapture
+    /// ```
+    ///
+    /// # What a failure would mean
+    ///
+    /// `RTA_IFP` is the slot immediately after the netmask, and the netmask of
+    /// a default route is the one sockaddr the kernel writes with `sa_len == 0`
+    /// — the only length at which Darwin's four-byte `ROUNDUP` and FreeBSD's
+    /// eight-byte one disagree. So this is the most specific detector available
+    /// for the alignment rule the parser asserts from `<net/route.h>` rather
+    /// than from a running kernel: with the wrong stride, `RTA_IFP` is read
+    /// from the middle of some other sockaddr and the index it reports has no
+    /// reason to match the header's.
+    ///
+    /// It also catches the reverse — a genuine disagreement between the two,
+    /// which would mean `rtparse::routes` is joining routes to the wrong
+    /// interface.
+    ///
+    /// # Its limit
+    ///
+    /// `RTA_IFP` is optional. A dump in which no message carries one leaves
+    /// nothing to compare and the test passes vacuously, so the count is
+    /// printed: a run reporting zero has proven nothing and should be read that
+    /// way.
+    #[test]
+    #[ignore = "queries the live routing table"]
+    fn rtm_index_and_rta_ifp_name_the_same_interface() {
+        for family in [Family::V4, Family::V6] {
+            let table = dump(family).expect("the routing table should be dumpable");
+            let mut rest = table.as_slice();
+            let mut compared = 0usize;
+
+            while let Some(head) = rtparse::message(rest) {
+                let (this, tail) = rest.split_at(head.msglen);
+                rest = tail;
+
+                if head.version != rtparse::RTM_VERSION || !rtparse::is_reportable(head.flags) {
+                    continue;
+                }
+                let Some(block) = rtparse::address_block(this, &head) else {
+                    continue;
+                };
+                let Some(parts) = rtparse::route_parts(block, &head, family) else {
+                    continue;
+                };
+                let Some(from_sockaddr) = parts.interface else {
+                    continue;
+                };
+
+                assert_eq!(
+                    head.index, from_sockaddr,
+                    "{family:?}: rtm_index says interface {} but RTA_IFP says {from_sockaddr} \
+                     for {parts:?} — the sockaddr walk is misaligned",
+                    head.index
+                );
+                compared += 1;
+            }
+
+            println!("{family:?}: cross-checked {compared} route(s) carrying RTA_IFP");
+        }
+    }
+}

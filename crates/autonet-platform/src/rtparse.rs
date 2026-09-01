@@ -559,7 +559,10 @@ pub(crate) fn routes(buffer: &[u8], family: Family, metrics: &HashMap<u32, u32>)
         // at all — which should not happen in a table dump, and where zero
         // would otherwise mean "interface 0", a device that does not exist. If
         // the two ever *disagree*, that is a sockaddr walk gone wrong rather
-        // than a routing fact, and the live tests are where it would show up.
+        // than a routing fact. That comparison is not observable from outside
+        // this crate, because `Route` carries one index and the other is
+        // dropped here; `macos::route`'s ignored `rtm_index_and_rta_ifp_name_
+        // the_same_interface` test is where it is checked against a live table.
         let interface_index = match head.index {
             0 => parts.interface.unwrap_or(0),
             index => index,
