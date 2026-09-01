@@ -37,6 +37,15 @@ use autonet_core::model::NetworkState;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod hwaddr;
 
+// Deciding what *sort* of device an interface is, on macOS. Compiled on Linux
+// too — and unused there, hence the allow — so that the decision table and its
+// tests run on the Linux job as well as the macOS one. Task 2 put its logic
+// inside the `cfg`-gated backend and consequently could only be tested on a
+// runner none of us can debug on; keeping the pure part out here is the fix.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+mod linktype;
+
 #[cfg(target_os = "linux")]
 mod linux;
 

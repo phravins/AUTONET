@@ -27,7 +27,7 @@
 //! `aarch64-apple-darwin` and `x86_64-apple-darwin`, but every claim about
 //! struct layout here is read from headers, not observed on a Mac.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::ffi::CStr;
 use std::net::{IpAddr, Ipv6Addr};
 
@@ -38,23 +38,23 @@ use if_addrs::IfAddr;
 use libc::{c_int, c_uint};
 
 use crate::hwaddr::format_mac;
+use crate::linktype::{self, Evidence, ScType, UNCLASSIFIED};
 use crate::PlatformError;
 
-/// What `Interface.kind` says until Task 3 asks SystemConfiguration.
+/// What SystemConfiguration calls each interface, keyed by BSD name.
 ///
-/// Reported rather than guessed. `classify_interface(name, None, …)` would fall
-/// through to name heuristics and then default to `Ethernet`, which labels
-/// `en0` a wired NIC on a Wi-Fi laptop — plausible, wrong on most Macs, and
-/// exactly the failure mode this backend exists to avoid.
-const UNCLASSIFIED: &str = "unclassified";
+/// Gathered once per snapshot and threaded through the walk, because
+/// `SCNetworkInterfaceCopyAll` enumerates everything in a single call — there
+/// is no per-interface framework call anywhere here.
+type ScTypes = HashMap<String, ScType>;
 
 /// Capture the machine's interfaces and their addresses.
 ///
 /// Routes are not collected yet, so the returned state has none. Until they
 /// are, selection has no default-route evidence to work with on macOS and its
 /// answer should not be trusted.
-pub(crate) fn snapshot() -> Result<NetworkState, PlatformError> {
-    let mut interfaces = links()?;
+pub(crate) fn snapshot(sc_types: &ScTypes) -> Result<NetworkState, PlatformError> {
+    let mut interfaces = links(sc_types)?;
     attach_addresses(&mut interfaces)?;
 
     Ok(NetworkState::new(interfaces.into_values().collect(), Vec::new()).captured_now())
@@ -69,7 +69,7 @@ pub(crate) fn snapshot() -> Result<NetworkState, PlatformError> {
 /// Keyed by name rather than index because that is the only join key the
 /// address pass has. A `BTreeMap` for the same reason as the Linux backend's:
 /// it makes `autonet interfaces` list devices in a stable order between runs.
-fn links() -> Result<BTreeMap<String, Interface>, PlatformError> {
+fn links(sc_types: &ScTypes) -> Result<BTreeMap<String, Interface>, PlatformError> {
     let mut head: *mut libc::ifaddrs = std::ptr::null_mut();
 
     // SAFETY: `getifaddrs` either writes an owned linked list into `head` and
@@ -87,7 +87,7 @@ fn links() -> Result<BTreeMap<String, Interface>, PlatformError> {
         // SAFETY: `node` is non-null and points into the list `getifaddrs`
         // built, which is not freed until the walk is over.
         let entry = unsafe { &*node };
-        if let Some(interface) = link_from(entry) {
+        if let Some(interface) = link_from(entry, sc_types) {
             interfaces.insert(interface.name.clone(), interface);
         }
         node = entry.ifa_next;
@@ -101,7 +101,7 @@ fn links() -> Result<BTreeMap<String, Interface>, PlatformError> {
 }
 
 /// Build an interface from one `AF_LINK` record, or skip anything else.
-fn link_from(entry: &libc::ifaddrs) -> Option<Interface> {
+fn link_from(entry: &libc::ifaddrs, sc_types: &ScTypes) -> Option<Interface> {
     if entry.ifa_addr.is_null() {
         return None;
     }
@@ -120,18 +120,30 @@ fn link_from(entry: &libc::ifaddrs) -> Option<Interface> {
 
     let flags = entry.ifa_flags;
     let is_loopback = has(flags, libc::IFF_LOOPBACK);
+    let point_to_point = has(flags, libc::IFF_POINTOPOINT);
+
+    // Three independent sources, weighed in `linktype`: the two flags the
+    // kernel set, what SystemConfiguration calls this BSD name, and the link
+    // type the driver reported. The name itself is passed only as a map key —
+    // it is never evidence.
+    let kind = linktype::classify(Evidence {
+        loopback: is_loopback,
+        point_to_point,
+        sc: sc_types.get(&name).copied(),
+        ifi_type: ifi_type_of(entry),
+    });
 
     Some(Interface {
         name,
         index,
-        kind: placeholder_kind(is_loopback),
+        kind,
         state: interface_state(flags),
         flags: InterfaceFlags {
             up: has(flags, libc::IFF_UP),
             running: has(flags, libc::IFF_RUNNING),
             loopback: is_loopback,
             broadcast: has(flags, libc::IFF_BROADCAST),
-            point_to_point: has(flags, libc::IFF_POINTOPOINT),
+            point_to_point,
             multicast: has(flags, libc::IFF_MULTICAST),
         },
         // SAFETY: as above — an `AF_LINK` sockaddr.
@@ -192,6 +204,32 @@ unsafe fn hardware_address(link: *const libc::sockaddr_dl) -> Option<String> {
     let bytes = unsafe { std::slice::from_raw_parts(start, addr_len) };
 
     format_mac(bytes)
+}
+
+/// The link type the driver reported, from the same `if_data` block as the MTU.
+///
+/// `ifi_type` is the first byte of `if_data`, so unlike `ifi_mtu` there is no
+/// offset arithmetic and no alignment question — a `u8` read is aligned
+/// everywhere. It is still read through the pointer rather than by copying the
+/// struct, for the reason spelled out on [`mtu_of`].
+///
+/// A null `ifa_data` yields [`linktype::IFI_TYPE_UNSPECIFIED`], which is the
+/// value the header itself uses for "unspecified", so an absent `if_data` block
+/// and an uninformative one take the same path through the classifier.
+fn ifi_type_of(entry: &libc::ifaddrs) -> u8 {
+    if entry.ifa_data.is_null() {
+        return linktype::IFI_TYPE_UNSPECIFIED;
+    }
+
+    let field = entry
+        .ifa_data
+        .cast::<u8>()
+        .wrapping_add(std::mem::offset_of!(libc::if_data, ifi_type));
+
+    // SAFETY: for an `AF_LINK` record `ifa_data` points at a `struct if_data`,
+    // whose first byte is `ifi_type`. Any `if_data` at all is at least one byte
+    // long, so this cannot read past a shorter kernel struct.
+    unsafe { field.read() }
 }
 
 /// The MTU, from the `if_data` block `getifaddrs` hangs off an `AF_LINK` entry.
@@ -285,7 +323,11 @@ fn orphan(name: &str, index: Option<u32>) -> Interface {
     Interface {
         name: name.to_owned(),
         index: index.unwrap_or_default(),
-        kind: placeholder_kind(false),
+        // No `AF_LINK` record means no flags and no `ifi_type`, so there is no
+        // evidence to classify from. Consulting SystemConfiguration alone would
+        // work, but an interface that reached this branch already contradicts
+        // what `getifaddrs` promises; saying so is better than half an answer.
+        kind: InterfaceKind::Other(UNCLASSIFIED.to_owned()),
         state: InterfaceState::Unknown,
         flags: InterfaceFlags::default(),
         mac: None,
@@ -325,17 +367,6 @@ fn interface_state(flags: c_uint) -> InterfaceState {
         InterfaceState::Up
     } else {
         InterfaceState::Unknown
-    }
-}
-
-/// What is honestly known about an interface's kind before Task 3.
-fn placeholder_kind(is_loopback: bool) -> InterfaceKind {
-    if is_loopback {
-        // `IFF_LOOPBACK` is a fact the kernel states, not an inference from
-        // the name, so it is safe to act on now.
-        InterfaceKind::Loopback
-    } else {
-        InterfaceKind::Other(UNCLASSIFIED.to_owned())
     }
 }
 
@@ -397,12 +428,12 @@ mod tests {
     }
 
     #[test]
-    fn only_loopback_is_classified_before_task_3() {
-        assert_eq!(placeholder_kind(true), InterfaceKind::Loopback);
+    fn an_interface_the_link_walk_missed_is_not_guessed_at() {
         // Notably *not* Ethernet, which is what name-based classification
-        // would return for en0.
+        // would return for en0. The decision table itself is exercised in
+        // `linktype`, whose tests run on every platform rather than only here.
         assert_eq!(
-            placeholder_kind(false),
+            orphan("en0", Some(4)).kind,
             InterfaceKind::Other(UNCLASSIFIED.to_owned())
         );
     }
