@@ -30,6 +30,13 @@
 
 use autonet_core::model::NetworkState;
 
+// Shared by both real backends rather than living in either: what counts as a
+// reportable MAC is a decision about AutoNet's output, and the two must not
+// drift. Gated on the platforms that have a backend so that a target with none
+// still compiles warning-free, as the module documentation above promises.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod hwaddr;
+
 #[cfg(target_os = "linux")]
 mod linux;
 
@@ -65,10 +72,6 @@ pub enum PlatformError {
 
 impl PlatformError {
     /// Wrap an arbitrary platform error with the operation that produced it.
-    // TEMPORARY. The macOS backend is still a scaffold with no failure path, so
-    // this is genuinely dead code there and `-D warnings` rejects it. Delete
-    // this attribute once macos/route.rs makes its first sysctl call.
-    #[cfg_attr(target_os = "macos", allow(dead_code))]
     pub(crate) fn query(operation: &'static str, error: impl std::fmt::Display) -> Self {
         Self::Query {
             operation,

@@ -25,8 +25,11 @@ futures-util = { version = "0.3", default-features = false, features = ["std"] }
 # re-exports it, because the CFType values cross between the two crates and a
 # version mismatch surfaces as an inscrutable trait error rather than a
 # version conflict. Pinning both makes that a resolver failure instead.
+#
+# if-addrs discards every fe80:: address unless `link-local` is enabled, and a
+# link-local address is a real answer for a peer on the same segment.
 [target.'cfg(target_os = "macos")'.dependencies]
-if-addrs = "0.14"
+if-addrs = { version = "0.14", features = ["link-local"] }
 system-configuration = "0.8"
 core-foundation = "0.10"
 libc = "0.2"

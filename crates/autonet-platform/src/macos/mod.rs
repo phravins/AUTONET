@@ -26,6 +26,14 @@
 //! layout, sysctl behaviour and SystemConfiguration coverage here is derived
 //! from documentation, not from a running system, and must be confirmed on
 //! hardware before this backend is trusted.
+//!
+//! Only the first of the three sources above is implemented. Until routes
+//! exist, the selection engine has no default-route evidence on macOS and its
+//! choice of address should not be relied on — see [`snapshot`].
+//!
+//! [`snapshot`]: MacosProvider::snapshot
+
+mod ifaddrs;
 
 use autonet_core::model::NetworkState;
 
@@ -45,11 +53,14 @@ impl MacosProvider {
 }
 
 impl NetworkProvider for MacosProvider {
+    /// Capture interfaces and their addresses.
+    ///
+    /// **Incomplete.** The returned state carries no routes, and every
+    /// non-loopback interface has an unclassified kind, because both come from
+    /// sources this backend does not consult yet. The snapshot is honest about
+    /// what it knows; it is not yet enough for selection to be trusted.
     fn snapshot(&self) -> Result<NetworkState, PlatformError> {
-        // TASK 1 SCAFFOLD. Returns an empty machine so the dispatch and the
-        // macOS CI job can be verified before any FFI is written. Task 2
-        // replaces this with the real `getifaddrs` walk.
-        Ok(NetworkState::new(Vec::new(), Vec::new()).captured_now())
+        ifaddrs::snapshot()
     }
 
     fn platform_name(&self) -> &'static str {

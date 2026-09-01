@@ -28,6 +28,7 @@ use netlink_packet_route::route::{RouteAddress, RouteAttribute, RouteMessage, Ro
 use netlink_packet_route::AddressFamily;
 use rtnetlink::{Handle, RouteMessageBuilder};
 
+use crate::hwaddr::format_mac;
 use crate::linux::sysfs;
 use crate::PlatformError;
 
@@ -158,24 +159,6 @@ fn interface_state(oper_state: Option<State>, flags: LinkFlags) -> InterfaceStat
         None if !flags.contains(LinkFlags::Up) => InterfaceState::Down,
         _ => InterfaceState::Unknown,
     }
-}
-
-/// Render a hardware address, or `None` if it is absent or meaningless.
-///
-/// Only 6-byte addresses are reported. Loopback and many tunnel devices carry
-/// an all-zero or zero-length address, which is noise rather than information,
-/// and InfiniBand's 20-byte addresses are not a MAC in any useful sense.
-fn format_mac(bytes: &[u8]) -> Option<String> {
-    if bytes.len() != 6 || bytes.iter().all(|b| *b == 0) {
-        return None;
-    }
-    Some(
-        bytes
-            .iter()
-            .map(|b| format!("{b:02x}"))
-            .collect::<Vec<_>>()
-            .join(":"),
-    )
 }
 
 // ---------------------------------------------------------------------------
@@ -363,21 +346,6 @@ fn route_address(value: &RouteAddress) -> Option<IpAddr> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn macs_are_lowercase_colon_separated() {
-        assert_eq!(
-            format_mac(&[0x02, 0x0a, 0xff, 0x00, 0x1b, 0xc3]).as_deref(),
-            Some("02:0a:ff:00:1b:c3")
-        );
-    }
-
-    #[test]
-    fn meaningless_hardware_addresses_are_dropped() {
-        assert_eq!(format_mac(&[0; 6]), None, "all-zero (loopback, tun)");
-        assert_eq!(format_mac(&[]), None, "absent");
-        assert_eq!(format_mac(&[0; 20]), None, "InfiniBand");
-    }
 
     #[test]
     fn tunnels_reporting_no_operstate_stay_usable() {

@@ -89,7 +89,10 @@ fn an_unparseable_family_fails_rather_than_falling_back() {
 // Contract that needs a working backend
 // ---------------------------------------------------------------------------
 
-#[cfg(target_os = "linux")]
+// Gated on the platforms with a backend: elsewhere `provider()` returns
+// `Unsupported`, and asserting that a snapshot describes the machine would be
+// asserting that AutoNet has been ported.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 mod live {
     use std::net::IpAddr;
 
