@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "interfaces": [
+    { "name": "lo0", "index": 1, "kind": "loopback", "state": "unknown",
+      "addresses": [ { "ip": "127.0.0.1", "family": "ipv4", "prefix_len": 8, "scope": "loopback" } ] },
+    { "name": "en0", "index": 4, "kind": "ethernet", "state": "up",
+      "addresses": [ { "ip": "10.0.0.20", "family": "ipv4", "prefix_len": 24, "scope": "private" } ] },
+    { "name": "en5", "index": 12, "kind": "ethernet", "state": "up",
+      "addresses": [ { "ip": "10.0.1.20", "family": "ipv4", "prefix_len": 24, "scope": "private" } ] },
+    { "name": "utun4", "index": 17, "kind": "vpn", "state": "unknown",
+      "addresses": [ { "ip": "10.8.0.2", "family": "ipv4", "prefix_len": 24, "scope": "private" } ] }
+  ],
+  "routes": [
+    { "destination": "0.0.0.0/0", "gateway": "10.0.0.1", "interface_index": 4,
+      "metric": 100, "family": "ipv4", "preferred_source": "10.0.0.20" },
+    { "destination": "0.0.0.0/0", "gateway": "10.0.1.1", "interface_index": 12,
+      "metric": 0, "family": "ipv4", "preferred_source": "10.0.1.20" },
+    { "destination": "0.0.0.0/0", "gateway": "10.8.0.1", "interface_index": 17,
+      "metric": 1000, "family": "ipv4", "preferred_source": "10.8.0.2" }
+  ]
+}

@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "interfaces": [
+    { "name": "lo0", "index": 1, "kind": "loopback", "state": "unknown",
+      "addresses": [ { "ip": "127.0.0.1", "family": "ipv4", "prefix_len": 8, "scope": "loopback" } ] },
+    { "name": "en0", "index": 4, "kind": "wireless", "state": "up",
+      "addresses": [ { "ip": "192.168.1.101", "family": "ipv4", "prefix_len": 24, "scope": "private" } ] },
+    { "name": "en1", "index": 5, "kind": "ethernet", "state": "up",
+      "addresses": [ { "ip": "10.0.0.20", "family": "ipv4", "prefix_len": 24, "scope": "private" } ] }
+  ],
+  "routes": [
+    { "destination": "0.0.0.0/0", "gateway": "192.168.1.1", "interface_index": 4,
+      "metric": 0, "family": "ipv4", "preferred_source": "192.168.1.101" },
+    { "destination": "0.0.0.0/0", "gateway": "10.0.0.1", "interface_index": 5,
+      "metric": 100, "family": "ipv4", "preferred_source": "10.0.0.20" }
+  ]
+}
