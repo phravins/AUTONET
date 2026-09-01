@@ -55,6 +55,14 @@ mod linktype;
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 mod rtparse;
 
+// Turning the macOS network service order into a route metric, on the same
+// terms again. This one is pure policy rather than parsing — a scale chosen
+// against the selector's weights — so running its tests on Linux is what keeps
+// the two crates' notions of `metric` from drifting apart unnoticed.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+mod servicerank;
+
 #[cfg(target_os = "linux")]
 mod linux;
 

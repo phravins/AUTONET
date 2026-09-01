@@ -35,6 +35,7 @@
 //! checked against `libc` at compile time. That a real dump behaves as
 //! described is confirmed only by running on a Mac.
 
+use std::collections::HashMap;
 use std::io;
 use std::ptr;
 
@@ -61,11 +62,18 @@ const RESIZE_ATTEMPTS: usize = 4;
 /// An empty result is a legitimate answer, not a failure: with every interface
 /// down there are no routes, and `NetworkState` already represents that as an
 /// empty vector.
-pub(crate) fn dump_routes() -> Result<Vec<Route>, PlatformError> {
+///
+/// `metrics` maps interface index to the metric each route on it should carry.
+/// Nothing in a routing message supplies one on Darwin, so it is passed in
+/// already resolved by [`crate::servicerank`] from the network service order —
+/// which is why this function takes a map rather than looking anything up:
+/// route parsing stays free of interface names, and the one place that decides
+/// what a metric *means* on macOS stays testable on Linux.
+pub(crate) fn dump_routes(metrics: &HashMap<u32, u32>) -> Result<Vec<Route>, PlatformError> {
     let mut routes = Vec::new();
     for family in [Family::V4, Family::V6] {
         let table = dump(family)?;
-        routes.extend(rtparse::routes(&table, family));
+        routes.extend(rtparse::routes(&table, family, metrics));
     }
     Ok(routes)
 }

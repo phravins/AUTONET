@@ -36,11 +36,15 @@
 //! it turns out to list them, the classifier answers from this map instead and
 //! is still correct — the uncertainty is one-directional.
 
-use std::collections::HashMap;
+use std::collections::hash_map::{Entry, HashMap};
 
+use core_foundation::base::TCFType;
+use core_foundation::string::CFString;
 use system_configuration::network_configuration::{
-    self, SCNetworkInterface, SCNetworkInterfaceType as ScNative,
+    self, SCNetworkInterface, SCNetworkInterfaceType as ScNative, SCNetworkService, SCNetworkSet,
 };
+use system_configuration::preferences::SCPreferences;
+use system_configuration::sys::network_configuration::SCNetworkSetCopyCurrent;
 
 use crate::linktype::ScType;
 
@@ -97,4 +101,105 @@ fn translate(interface: &SCNetworkInterface) -> Option<ScType> {
         ScNative::IrDA => ScType::IrDa,
         ScNative::IPv4 => ScType::Ipv4,
     })
+}
+
+/// The network service order, as ranks keyed by BSD interface name.
+///
+/// This is the list System Settings ▸ Network shows and lets the user drag to
+/// reorder, and it is macOS's own answer to "which link is preferred". Rank 0
+/// is the most preferred. [`crate::servicerank`] turns a rank into the route
+/// metric the selector consumes, and documents why it is only a tie-breaker.
+///
+/// # The join
+///
+/// The service order is a list of *service* identifiers, not interfaces, so it
+/// takes two hops: `SCNetworkSetGetServiceOrder` gives ordered service IDs,
+/// `SCNetworkServiceCopyAll` gives services, and each service names the
+/// interface behind it. The crate's own `test_service_order` already asserts
+/// that the IDs in the order really do match `SCNetworkService::id()`, so this
+/// join is confirmed upstream rather than assumed here.
+///
+/// Ranks are assigned densely over the interfaces actually resolved: a service
+/// whose ID does not resolve to a BSD name — a VPN service that is configured
+/// but not connected, for instance — is skipped without consuming a rank, so a
+/// stale entry cannot push every real interface one step down.
+///
+/// Two services can name the same interface (a second configuration on `en0`).
+/// The first wins, since that is the higher-priority one and the second says
+/// nothing new about the link.
+///
+/// # Infallible, like [`interface_types`]
+///
+/// An empty map is a legitimate answer, not a failure: every interface then
+/// gets the same metric and ranking degrades to what it was before this
+/// existed. AutoNet reporting a slightly worse-ordered answer beats AutoNet
+/// reporting no address at all.
+///
+/// Nothing here writes. `SCNetworkSetSetServiceOrder` is never called, and
+/// reading the configuration needs no elevated privileges.
+///
+/// # Status
+///
+/// **Unverified on hardware.** The call chain type-checks and the ID join is
+/// tested upstream, but that the resulting order matches what System Settings
+/// displays is confirmed only by running on a Mac with two links up.
+pub(crate) fn service_order() -> HashMap<String, u32> {
+    let preferences = SCPreferences::default(&CFString::new("autonet"));
+    let Some(set) = current_set(&preferences) else {
+        return HashMap::new();
+    };
+
+    // Service ID -> BSD name, built once so the ordered walk below is a hash
+    // probe per entry rather than a rescan of every service.
+    let interface_of: HashMap<String, String> = SCNetworkService::get_services(&preferences)
+        .iter()
+        .filter_map(|service| {
+            Some((
+                service.id()?.to_string(),
+                service.network_interface()?.bsd_name()?.to_string(),
+            ))
+        })
+        .collect();
+
+    // `SCNetworkService::enabled()` is deliberately not consulted: the vendored
+    // crate implements it as `SCNetworkServiceGetEnabled(..) == 0`, which
+    // reports a *disabled* service as enabled. Whether a link is usable already
+    // comes from `IFF_UP` in `super::ifaddrs`, which is the kernel's answer
+    // rather than the configuration's, so nothing is lost by leaving it alone.
+    let order = set.service_order();
+    let mut ranked: HashMap<String, u32> = HashMap::new();
+    let mut rank = 0u32;
+
+    for id in order.iter() {
+        let Some(name) = interface_of.get(&id.to_string()) else {
+            continue;
+        };
+        if let Entry::Vacant(slot) = ranked.entry(name.clone()) {
+            slot.insert(rank);
+            rank += 1;
+        }
+    }
+
+    ranked
+}
+
+/// The machine's current network set, or `None` if it has none.
+///
+/// Not `SCNetworkSet::new`, which is the obvious call and is unsound:
+/// `network_configuration.rs:281` wraps `SCNetworkSetCopyCurrent`'s result
+/// without a null check, so a machine with no current set gets a `CFRelease`
+/// of a null pointer when the wrapper drops — a hard crash rather than an
+/// error. Calling through the re-exported `sys` bindings lets the pointer be
+/// checked before it is wrapped, which is the entire reason for the raw FFI
+/// here; everything else goes through the safe API.
+fn current_set(preferences: &SCPreferences) -> Option<SCNetworkSet> {
+    // SAFETY: `preferences` is a live `SCPreferences`, and its concrete ref is
+    // exactly the `SCPreferencesRef` this function expects. The result follows
+    // the Core Foundation *Copy* rule — we own a reference — so it is wrapped
+    // under the create rule, and only after being checked for null.
+    let set = unsafe { SCNetworkSetCopyCurrent(preferences.as_concrete_TypeRef()) };
+    if set.is_null() {
+        return None;
+    }
+    Some(unsafe { SCNetworkSet::wrap_under_create_rule(set) })
 }

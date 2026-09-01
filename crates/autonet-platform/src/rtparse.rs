@@ -32,9 +32,12 @@
 //! the tests here assume is read from `route.h`, and is confirmed only by
 //! running against a Mac.
 
+use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
 use autonet_core::model::{Family, IpNetwork, Route};
+
+use crate::servicerank;
 
 /// Address families, as Darwin numbers them.
 ///
@@ -519,12 +522,14 @@ pub(crate) fn route_parts(block: &[u8], message: &Message, fallback: Family) -> 
 /// reading arbitrary bytes as addresses. Individual messages that parse but are
 /// not routes are skipped without ending the walk.
 ///
-/// The metric is left at zero. macOS has no per-route metric — `rmx_hopcount`
-/// is not one and reads 0 on Darwin — so there is nothing here to read it from;
-/// it is filled in from the SystemConfiguration service order separately. This
-/// is a real gap rather than a field that happens to be zero, and it means that
-/// on its own this function cannot rank two default routes.
-pub(crate) fn routes(buffer: &[u8], family: Family) -> Vec<Route> {
+/// `metrics` supplies the metric per interface index. macOS has no per-route
+/// metric — `rmx_hopcount` is not one and reads 0 on Darwin — so there is
+/// nothing in these bytes to read it from and it has to be supplied from
+/// outside; [`crate::servicerank`] derives it from the network service order.
+/// A route naming an interface the map does not cover takes
+/// [`servicerank::UNRANKED`], which is the same answer an interface absent from
+/// the service order gets: no preference expressed, never a silent win.
+pub(crate) fn routes(buffer: &[u8], family: Family, metrics: &HashMap<u32, u32>) -> Vec<Route> {
     let mut found = Vec::new();
     let mut rest = buffer;
 
@@ -545,27 +550,31 @@ pub(crate) fn routes(buffer: &[u8], family: Family) -> Vec<Route> {
             continue;
         };
 
+        // `rtm_index` is authoritative: the kernel fills it on every message,
+        // whereas `RTA_IFP` is optional. It is the same ifindex namespace
+        // `sdl_index` gave the interface walk, so this is a numeric join with
+        // no name matching anywhere.
+        //
+        // `RTA_IFP` is the fallback only for a message that names no interface
+        // at all — which should not happen in a table dump, and where zero
+        // would otherwise mean "interface 0", a device that does not exist. If
+        // the two ever *disagree*, that is a sockaddr walk gone wrong rather
+        // than a routing fact, and the live tests are where it would show up.
+        let interface_index = match head.index {
+            0 => parts.interface.unwrap_or(0),
+            index => index,
+        };
+
         found.push(Route {
             destination: parts.destination,
             gateway: parts.gateway,
-            metric: 0,
+            metric: metrics
+                .get(&interface_index)
+                .copied()
+                .unwrap_or(servicerank::UNRANKED),
             family: parts.family,
             preferred_source: parts.preferred_source,
-            // `rtm_index` is authoritative: the kernel fills it on every
-            // message, whereas `RTA_IFP` is optional. It is the same ifindex
-            // namespace `sdl_index` gave the interface walk, so this is a
-            // numeric join with no name matching anywhere.
-            //
-            // `RTA_IFP` is the fallback only for a message that names no
-            // interface at all — which should not happen in a table dump, and
-            // where zero would otherwise mean "interface 0", a device that does
-            // not exist. If the two ever *disagree*, that is a sockaddr walk
-            // gone wrong rather than a routing fact, and the live tests are
-            // where it would show up.
-            interface_index: match head.index {
-                0 => parts.interface.unwrap_or(0),
-                index => index,
-            },
+            interface_index,
         });
     }
 
@@ -1043,7 +1052,7 @@ mod tests {
 
     #[test]
     fn a_dump_yields_the_routes_and_drops_the_arp_cache() {
-        let found = routes(&a_dump(), Family::V4);
+        let found = routes(&a_dump(), Family::V4, &no_metrics());
 
         assert_eq!(found.len(), 2, "the ARP entry is not a route");
         assert!(found[0].is_default());
@@ -1063,7 +1072,7 @@ mod tests {
         // sockaddrs — `rtm_msglen` is what locates the next message, so past a
         // bad header there is nothing trustworthy left.
         let full = a_dump();
-        let found = routes(&full[..full.len() - 8], Family::V4);
+        let found = routes(&full[..full.len() - 8], Family::V4, &no_metrics());
         assert_eq!(found.len(), 1);
         assert!(found[0].is_default());
     }
@@ -1075,7 +1084,7 @@ mod tests {
 
         // Skipped, but its length still carries the walk to the next message,
         // so the LAN route after it survives.
-        let found = routes(&buffer, Family::V4);
+        let found = routes(&buffer, Family::V4, &no_metrics());
         assert_eq!(found.len(), 1);
         assert_eq!(
             found[0].destination,
@@ -1098,20 +1107,47 @@ mod tests {
             ],
         );
 
-        assert_eq!(routes(&bytes, Family::V4)[0].interface_index, 12);
+        assert_eq!(
+            routes(&bytes, Family::V4, &no_metrics())[0].interface_index,
+            12
+        );
     }
 
     #[test]
     fn an_empty_dump_is_no_routes_rather_than_an_error() {
         // Airplane mode: the sysctl succeeds and returns nothing.
-        assert!(routes(&[], Family::V4).is_empty());
+        assert!(routes(&[], Family::V4, &no_metrics()).is_empty());
     }
 
     #[test]
-    fn every_route_in_a_dump_carries_the_metric_macos_does_not_provide() {
-        // Guards the honesty of the zero: it is a documented absence filled in
-        // from the service order elsewhere, not a value read from the kernel.
-        assert!(routes(&a_dump(), Family::V4).iter().all(|r| r.metric == 0));
+    fn a_routes_metric_comes_from_the_map_and_not_from_the_kernel() {
+        // Nothing in a routing message carries a metric on Darwin, so it is
+        // supplied per interface index. Both routes in the dump are on
+        // interface 4 and must pick up its value.
+        let metrics: HashMap<u32, u32> = [(4, 300)].into_iter().collect();
+        let found = routes(&a_dump(), Family::V4, &metrics);
+
+        assert_eq!(found.len(), 2);
+        assert!(found.iter().all(|route| route.metric == 300));
+    }
+
+    #[test]
+    fn a_route_on_an_interface_the_map_does_not_cover_is_unranked() {
+        // Should not happen — the map is built from the same snapshot's
+        // interfaces — but a route naming an unknown interface must take the
+        // worst metric rather than the best. Defaulting to zero here would
+        // make a route AutoNet cannot even resolve to an interface outrank
+        // every real one.
+        let found = routes(&a_dump(), Family::V4, &no_metrics());
+        assert!(found
+            .iter()
+            .all(|route| route.metric == servicerank::UNRANKED));
+    }
+
+    /// A machine whose service order told us nothing, for the tests that are
+    /// about the parse rather than about ranking.
+    fn no_metrics() -> HashMap<u32, u32> {
+        HashMap::new()
     }
 
     #[test]

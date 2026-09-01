@@ -6,7 +6,7 @@
 //! | Source | Provides |
 //! |---|---|
 //! | `getifaddrs(3)` | interfaces, addresses, link flags, MAC, MTU |
-//! | SystemConfiguration | what *sort* of device each interface is |
+//! | SystemConfiguration | what *sort* of device each interface is, and which link is preferred |
 //! | `PF_ROUTE` / `NET_RT_DUMP` | routes, gateways, the default route |
 //!
 //! # Why not just names
@@ -27,10 +27,10 @@
 //! coverage is derived from documentation, not from a running system, and must
 //! be confirmed on hardware before this backend is trusted.
 //!
-//! All three sources are now implemented. What routes do *not* yet carry is a
-//! meaningful metric: macOS has no per-route metric, so two default routes
-//! currently tie and are broken by interface index rather than by the service
-//! order set in System Settings — see [`route`].
+//! All three sources are implemented. Note that `Route::metric` means something
+//! different here than on Linux: macOS has no per-route metric, so it is
+//! synthesized from the network service order rather than read from the kernel
+//! — see [`crate::servicerank`] for the scale and its limits.
 
 mod ifaddrs;
 mod route;
@@ -38,7 +38,7 @@ mod scnetwork;
 
 use autonet_core::model::NetworkState;
 
-use crate::{NetworkProvider, PlatformError};
+use crate::{servicerank, NetworkProvider, PlatformError};
 
 /// Reads network state from macOS.
 ///
@@ -62,9 +62,16 @@ impl NetworkProvider for MacosProvider {
     /// both are fresh, rather than the walk re-querying per interface. Routes
     /// come last, in the same order as the Linux backend's `collect`, and join
     /// back to the interfaces on the kernel's own interface index.
+    ///
+    /// The service order is resolved in between, because it is the one join
+    /// that needs both sides: SystemConfiguration knows interfaces by BSD name
+    /// and routing messages know them only by index, so the interface list is
+    /// what bridges them. Routes are therefore built with their metric already
+    /// in place rather than being walked a second time to patch it in.
     fn snapshot(&self) -> Result<NetworkState, PlatformError> {
         let interfaces = ifaddrs::interfaces(&scnetwork::interface_types())?;
-        let routes = route::dump_routes()?;
+        let metrics = servicerank::metrics_by_index(&interfaces, &scnetwork::service_order());
+        let routes = route::dump_routes(&metrics)?;
 
         Ok(NetworkState::new(interfaces, routes).captured_now())
     }
