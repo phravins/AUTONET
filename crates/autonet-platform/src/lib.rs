@@ -33,7 +33,10 @@ use autonet_core::model::NetworkState;
 #[cfg(target_os = "linux")]
 mod linux;
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(target_os = "macos")]
+mod macos;
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 mod unsupported;
 
 /// Something went wrong while asking the operating system about its network.
@@ -62,6 +65,10 @@ pub enum PlatformError {
 
 impl PlatformError {
     /// Wrap an arbitrary platform error with the operation that produced it.
+    // TEMPORARY. The macOS backend is still a scaffold with no failure path, so
+    // this is genuinely dead code there and `-D warnings` rejects it. Delete
+    // this attribute once macos/route.rs makes its first sysctl call.
+    #[cfg_attr(target_os = "macos", allow(dead_code))]
     pub(crate) fn query(operation: &'static str, error: impl std::fmt::Display) -> Self {
         Self::Query {
             operation,
@@ -107,7 +114,12 @@ pub fn provider() -> Result<Box<dyn NetworkProvider>, PlatformError> {
         Ok(Box::new(linux::LinuxProvider::new()?))
     }
 
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(target_os = "macos")]
+    {
+        Ok(Box::new(macos::MacosProvider::new()))
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
         Ok(Box::new(unsupported::UnsupportedProvider::new()))
     }

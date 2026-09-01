@@ -10,11 +10,9 @@
 //! `~/.config/autonet/config.toml` on the machine running the tests cannot
 //! change the result.
 
-use std::net::IpAddr;
 use std::process::Command as StdCommand;
 
 use assert_cmd::prelude::*;
-use serde_json::Value;
 
 /// The binary, insulated from the ambient environment.
 fn autonet() -> StdCommand {
@@ -93,6 +91,10 @@ fn an_unparseable_family_fails_rather_than_falling_back() {
 
 #[cfg(target_os = "linux")]
 mod live {
+    use std::net::IpAddr;
+
+    use serde_json::Value;
+
     use super::*;
 
     /// Exit code 1 means "nothing selectable", which is a legitimate answer on

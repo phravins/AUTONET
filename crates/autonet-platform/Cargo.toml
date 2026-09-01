@@ -18,5 +18,18 @@ netlink-packet-route = "0.33"
 tokio = { version = "1", features = ["rt", "net", "macros"] }
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
 
+# macOS needs no async runtime: getifaddrs and sysctl are ordinary blocking
+# calls, so the synchronous NetworkProvider trait fits it directly.
+#
+# core-foundation is listed explicitly even though system-configuration
+# re-exports it, because the CFType values cross between the two crates and a
+# version mismatch surfaces as an inscrutable trait error rather than a
+# version conflict. Pinning both makes that a resolver failure instead.
+[target.'cfg(target_os = "macos")'.dependencies]
+if-addrs = "0.14"
+system-configuration = "0.8"
+core-foundation = "0.10"
+libc = "0.2"
+
 [dev-dependencies]
 serde_json = { workspace = true }

@@ -1,0 +1,61 @@
+name: CI
+
+# AutoNet's whole design rests on autonet-core being platform-free and
+# autonet-platform being the only crate that talks to a kernel. That claim is
+# only worth anything if it is checked on more than one kernel, so every push
+# builds and tests on both Linux and macOS.
+#
+# The live checks in crates/autonet-platform/tests/live.rs are deliberately
+# *not* run here. They depend on which network the runner happens to be on, and
+# a failure would say nothing about the code.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A second push to the same branch makes the first one's result irrelevant.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # A warning that only appears in a log nobody reads is not a warning.
+  RUSTFLAGS: -D warnings
+
+jobs:
+  test:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # Report both platforms rather than cancelling the survivor: "does this
+      # fail everywhere or only on macOS?" is the first question worth asking.
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # rust-toolchain.toml pins the channel and components, so rustup resolves
+      # the toolchain from the repository rather than from whatever the runner
+      # image ships. Installing it as its own step keeps the download out of
+      # the middle of the first cargo invocation's output.
+      - name: Install the pinned toolchain
+        run: |
+          rustup show active-toolchain || rustup toolchain install
+          rustc --version && cargo --version
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.os }}
+
+      - name: Format
+        run: cargo fmt --all --check
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Test
+        run: cargo test --workspace
