@@ -51,7 +51,10 @@ fn ipv6() -> SelectionConfig {
 /// A naive "first address found" implementation returns `172.20.0.1` here.
 #[test]
 fn this_machine_selects_the_wifi_lan_address() {
-    assert_eq!(pick("this-machine", &SelectionConfig::default()), "192.168.1.101");
+    assert_eq!(
+        pick("this-machine", &SelectionConfig::default()),
+        "192.168.1.101"
+    );
 }
 
 #[test]
@@ -103,7 +106,10 @@ fn this_machine_rejects_every_bridge_veth_and_loopback() {
         .iter()
         .find(|c| c.interface == "wlo1" && c.address.ip.to_string().starts_with("fe80"))
         .unwrap();
-    assert_eq!(wifi_link_local.disqualified, Some(Disqualification::LinkLocal));
+    assert_eq!(
+        wifi_link_local.disqualified,
+        Some(Disqualification::LinkLocal)
+    );
 }
 
 #[test]
@@ -121,19 +127,28 @@ fn this_machine_ipv6_returns_the_global_address_never_a_link_local_one() {
 
 #[test]
 fn wifi_only() {
-    assert_eq!(pick("wifi-only", &SelectionConfig::default()), "192.168.1.101");
+    assert_eq!(
+        pick("wifi-only", &SelectionConfig::default()),
+        "192.168.1.101"
+    );
 }
 
 #[test]
 fn ethernet_only() {
-    assert_eq!(pick("ethernet-only", &SelectionConfig::default()), "10.0.0.20");
+    assert_eq!(
+        pick("ethernet-only", &SelectionConfig::default()),
+        "10.0.0.20"
+    );
 }
 
 #[test]
 fn ethernet_wins_when_a_laptop_is_docked() {
     // Both links are up and both carry a default route; the wired one is both
     // the better kind and the lower metric.
-    assert_eq!(pick("wifi-and-ethernet", &SelectionConfig::default()), "10.0.0.20");
+    assert_eq!(
+        pick("wifi-and-ethernet", &SelectionConfig::default()),
+        "10.0.0.20"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -145,7 +160,10 @@ fn a_vpn_does_not_hijack_the_lan_address() {
     // wg0 owns a default route at metric 50 — lower than Wi-Fi's 600 — so a
     // metric-only implementation would hand back 10.8.0.2, which nobody on the
     // LAN can reach.
-    assert_eq!(pick("wifi-plus-vpn", &SelectionConfig::default()), "192.168.1.101");
+    assert_eq!(
+        pick("wifi-plus-vpn", &SelectionConfig::default()),
+        "192.168.1.101"
+    );
 }
 
 #[test]
@@ -234,7 +252,10 @@ fn stable_ipv6_addresses_beat_privacy_temporaries() {
 fn cgnat_loses_to_an_ordinary_private_address() {
     // Phone hotspot on carrier-grade NAT alongside a real LAN: the CGNAT
     // address is routable outward but generally not reachable inward.
-    assert_eq!(pick("cgnat-hotspot", &SelectionConfig::default()), "192.168.8.42");
+    assert_eq!(
+        pick("cgnat-hotspot", &SelectionConfig::default()),
+        "192.168.8.42"
+    );
 }
 
 #[test]

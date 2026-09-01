@@ -201,7 +201,10 @@ mod tests {
 
     #[test]
     fn identical_snapshots_produce_no_events() {
-        let s = NetworkState::new(vec![wifi("192.168.1.101")], vec![route(3, "192.168.1.1", 600)]);
+        let s = NetworkState::new(
+            vec![wifi("192.168.1.101")],
+            vec![route(3, "192.168.1.1", 600)],
+        );
         assert!(diff(&s, &s).is_empty());
     }
 
@@ -224,7 +227,10 @@ mod tests {
         let eth = Interface::new("eno1", 2, InterfaceKind::Ethernet, InterfaceState::Up)
             .with_address(Address::new("10.0.0.20".parse().unwrap(), 24));
 
-        let before = NetworkState::new(vec![wifi("192.168.1.101")], vec![route(3, "192.168.1.1", 600)]);
+        let before = NetworkState::new(
+            vec![wifi("192.168.1.101")],
+            vec![route(3, "192.168.1.1", 600)],
+        );
         let after = NetworkState::new(
             vec![eth, wifi("192.168.1.101")],
             vec![route(2, "10.0.0.1", 100), route(3, "192.168.1.1", 600)],
@@ -249,7 +255,10 @@ mod tests {
 
     #[test]
     fn disconnecting_reports_the_route_going_away() {
-        let before = NetworkState::new(vec![wifi("192.168.1.101")], vec![route(3, "192.168.1.1", 600)]);
+        let before = NetworkState::new(
+            vec![wifi("192.168.1.101")],
+            vec![route(3, "192.168.1.1", 600)],
+        );
         let after = NetworkState::new(vec![], vec![]);
         let d = diff(&before, &after);
 
@@ -259,7 +268,10 @@ mod tests {
             .any(|e| matches!(e, NetworkEvent::InterfaceRemoved { .. })));
         assert!(d.events.iter().any(|e| matches!(
             e,
-            NetworkEvent::DefaultRouteChanged { to_interface: None, .. }
+            NetworkEvent::DefaultRouteChanged {
+                to_interface: None,
+                ..
+            }
         )));
     }
 

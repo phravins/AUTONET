@@ -47,8 +47,8 @@ prefers wired over wireless, prefers ordinary private LAN addresses, and ignores
 loopback, link-local, Docker bridges, veth pairs, virtual-machine networks and —
 unless you ask — VPN tunnels.
 
-On a laptop with 22 interfaces, nine of them Docker bridges, it returns the one
-address that works.
+On a laptop with 23 interfaces — nine bridges and eleven veth pairs among them —
+it returns the one address that works.
 
 If nothing is reachable, it says so and exits non-zero. It does not invent a
 plausible-looking answer.
@@ -251,7 +251,7 @@ that talks to the kernel, and its only job is to produce that value.
 
 So the selection engine is tested against JSON fixtures — a Wi-Fi-only laptop, a
 docked laptop, a machine behind a VPN, an offline machine running Docker, the
-22-interface development host — and switching networks while the suite runs
+23-interface development host — and switching networks while the suite runs
 cannot change a single result. Only the thin platform layer needs a live machine,
 and its tests are `#[ignore]`d for that reason.
 

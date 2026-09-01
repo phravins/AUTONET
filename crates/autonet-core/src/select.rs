@@ -228,10 +228,13 @@ impl Selection {
 
     /// A human-readable explanation of why nothing was selected.
     ///
-    /// Reports the most common disqualification, which is nearly always the
-    /// actual story: everything was down, or everything was loopback.
+    /// Usually the most common disqualification, which is nearly always the
+    /// actual story: everything was down, or everything was loopback. The
+    /// config is needed because two of the interesting cases — "you narrowed
+    /// the search yourself" and "this network gave you no usable address of
+    /// that family" — cannot be told apart from the candidate list alone.
     #[must_use]
-    pub fn failure_reason(&self) -> String {
+    pub fn failure_reason(&self, config: &SelectionConfig) -> String {
         if self.candidates.is_empty() {
             return "no interfaces reported any addresses".to_string();
         }
@@ -248,8 +251,11 @@ impl Selection {
                 Disqualification::NotRequiredInterface | Disqualification::ExcludedByConfig
             )
         };
-        let rejected: Vec<Disqualification> =
-            self.candidates.iter().filter_map(|c| c.disqualified).collect();
+        let rejected: Vec<Disqualification> = self
+            .candidates
+            .iter()
+            .filter_map(|c| c.disqualified)
+            .collect();
         let considered: Vec<Disqualification> =
             rejected.iter().copied().filter(|d| !narrowing(d)).collect();
 
@@ -266,6 +272,39 @@ impl Selection {
             } else {
                 "every interface was excluded by configuration".to_string()
             };
+        }
+
+        // A modal count answers "what rejected the most addresses", which is
+        // not the same question as "why can nothing be reached". On a machine
+        // with a dozen veths the tally is dominated by container interfaces
+        // even when the real story is that this network handed out no routable
+        // address at all — the ordinary case for IPv6 behind a home router.
+        // Blaming Docker there would send the user hunting the wrong problem,
+        // so that case is recognised before any counting happens.
+        //
+        // Only addresses of the family that was asked for can speak to whether
+        // that family is usable. Filtering on the family rather than on the
+        // `FamilyMismatch` verdict matters: disqualification is ordered, and an
+        // IPv4 address on a down interface is reported as `InterfaceDown` long
+        // before the family check ever sees it.
+        let in_family: Vec<&Candidate> = self
+            .candidates
+            .iter()
+            .filter(|c| config.prefer_family.admits(c.address.family))
+            .collect();
+        if !in_family.is_empty()
+            && !in_family
+                .iter()
+                .any(|c| c.address.scope.is_reachable_by_peers())
+        {
+            return format!(
+                "this machine has no {}address another device could reach (only {})",
+                config
+                    .prefer_family
+                    .preferred()
+                    .map_or_else(String::new, |f| format!("{f} ")),
+                scopes_present(&in_family),
+            );
         }
 
         // Counted in a Vec rather than a map so that ties resolve toward the
@@ -285,6 +324,25 @@ impl Selection {
             ),
             None => "no candidate scored high enough to be selected".to_string(),
         }
+    }
+}
+
+/// The distinct scopes present, as prose.
+///
+/// Listed from the data rather than hard-coded as "loopback and link-local" so
+/// the sentence stays true if an unusual machine turns up something else.
+/// Sorted by name so the message reads the same on every run.
+fn scopes_present(candidates: &[&Candidate]) -> String {
+    let mut names: Vec<String> = candidates
+        .iter()
+        .map(|c| c.address.scope.to_string())
+        .collect();
+    names.sort_unstable();
+    names.dedup();
+    match names.split_last() {
+        None => "nothing".to_string(),
+        Some((last, [])) => last.clone(),
+        Some((last, rest)) => format!("{} and {last}", rest.join(", ")),
     }
 }
 
@@ -314,19 +372,25 @@ pub fn select(state: &NetworkState, config: &SelectionConfig) -> Selection {
             .then_with(|| a.address.ip.cmp(&b.address.ip))
     });
 
-    let selected = candidates.iter().find(|c| c.is_eligible()).map(|c| SelectedAddress {
-        ip: c.address.ip,
-        family: c.address.family,
-        prefix_len: c.address.prefix_len,
-        scope: c.address.scope,
-        interface: c.interface.clone(),
-        interface_index: c.interface_index,
-        interface_kind: c.interface_kind.clone(),
-        gateway: state.gateway_for(c.interface_index, c.address.family),
-        score: c.score,
-    });
+    let selected = candidates
+        .iter()
+        .find(|c| c.is_eligible())
+        .map(|c| SelectedAddress {
+            ip: c.address.ip,
+            family: c.address.family,
+            prefix_len: c.address.prefix_len,
+            scope: c.address.scope,
+            interface: c.interface.clone(),
+            interface_index: c.interface_index,
+            interface_kind: c.interface_kind.clone(),
+            gateway: state.gateway_for(c.interface_index, c.address.family),
+            score: c.score,
+        });
 
-    Selection { selected, candidates }
+    Selection {
+        selected,
+        candidates,
+    }
 }
 
 /// Select an address, treating "nothing usable" as an error.
@@ -344,7 +408,7 @@ pub fn select_address(state: &NetworkState, config: &SelectionConfig) -> Result<
     match selection.selected.take() {
         Some(address) => Ok(address),
         None => Err(CoreError::NoAddressFound {
-            reason: selection.failure_reason(),
+            reason: selection.failure_reason(config),
         }),
     }
 }
@@ -425,7 +489,11 @@ fn evaluate(
 
     // --- Family preference. ---
     if config.prefer_family.preferred() == Some(family) {
-        score += push(&mut candidate.reasons, "family_match", weights::FAMILY_MATCH);
+        score += push(
+            &mut candidate.reasons,
+            "family_match",
+            weights::FAMILY_MATCH,
+        );
     }
 
     // --- Where the address sits in the address space. ---
@@ -533,7 +601,7 @@ fn disqualify(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{InterfaceState, IpNetwork, Route, SCHEMA_VERSION};
+    use crate::model::{FamilyPreference, InterfaceState, IpNetwork, Route, SCHEMA_VERSION};
     use std::net::Ipv4Addr;
 
     fn addr(s: &str, prefix: u8) -> Address {
@@ -572,7 +640,12 @@ mod tests {
     fn dev_host() -> NetworkState {
         NetworkState::new(
             vec![
-                iface("lo", 1, InterfaceKind::Loopback, &[("127.0.0.1", 8), ("::1", 128)]),
+                iface(
+                    "lo",
+                    1,
+                    InterfaceKind::Loopback,
+                    &[("127.0.0.1", 8), ("::1", 128)],
+                ),
                 {
                     let mut e = iface("eno2", 2, InterfaceKind::Ethernet, &[]);
                     e.state = InterfaceState::Down;
@@ -588,15 +661,30 @@ mod tests {
                         ("fe80::a00:27ff:fe4e:66a1", 64),
                     ],
                 ),
-                iface("docker0", 4, InterfaceKind::Container, &[("172.17.0.1", 16)]),
+                iface(
+                    "docker0",
+                    4,
+                    InterfaceKind::Container,
+                    &[("172.17.0.1", 16)],
+                ),
                 iface(
                     "br-18642d3532b2",
                     5,
                     InterfaceKind::Container,
                     &[("172.20.0.1", 16)],
                 ),
-                iface("virbr0", 6, InterfaceKind::Virtual, &[("192.168.122.1", 24)]),
-                iface("veth7faf9d0", 7, InterfaceKind::Container, &[("fe80::a00:27ff:fe11:2233", 64)]),
+                iface(
+                    "virbr0",
+                    6,
+                    InterfaceKind::Virtual,
+                    &[("192.168.122.1", 24)],
+                ),
+                iface(
+                    "veth7faf9d0",
+                    7,
+                    InterfaceKind::Container,
+                    &[("fe80::a00:27ff:fe11:2233", 64)],
+                ),
             ],
             vec![default_route(3, "192.168.1.1", 600)],
         )
@@ -640,7 +728,12 @@ mod tests {
         let state = NetworkState::new(
             vec![
                 iface("wlo1", 3, InterfaceKind::Wireless, &[("192.168.1.101", 24)]),
-                iface("docker0", 4, InterfaceKind::Container, &[("172.17.0.1", 16)]),
+                iface(
+                    "docker0",
+                    4,
+                    InterfaceKind::Container,
+                    &[("172.17.0.1", 16)],
+                ),
             ],
             vec![
                 default_route(3, "192.168.1.1", 600),
@@ -668,9 +761,24 @@ mod tests {
         let state = NetworkState::new(
             vec![
                 iface("lo", 1, InterfaceKind::Loopback, &[("127.0.0.1", 8)]),
-                iface("docker0", 4, InterfaceKind::Container, &[("172.17.0.1", 16)]),
-                iface("br-18642d3532b2", 5, InterfaceKind::Container, &[("172.20.0.1", 16)]),
-                iface("virbr0", 6, InterfaceKind::Virtual, &[("192.168.122.1", 24)]),
+                iface(
+                    "docker0",
+                    4,
+                    InterfaceKind::Container,
+                    &[("172.17.0.1", 16)],
+                ),
+                iface(
+                    "br-18642d3532b2",
+                    5,
+                    InterfaceKind::Container,
+                    &[("172.20.0.1", 16)],
+                ),
+                iface(
+                    "virbr0",
+                    6,
+                    InterfaceKind::Virtual,
+                    &[("192.168.122.1", 24)],
+                ),
             ],
             vec![],
         );
@@ -730,7 +838,12 @@ mod tests {
         let state = NetworkState::new(
             vec![
                 iface("br0", 2, InterfaceKind::Bridge, &[("192.168.1.50", 24)]),
-                iface("docker0", 3, InterfaceKind::Container, &[("172.17.0.1", 16)]),
+                iface(
+                    "docker0",
+                    3,
+                    InterfaceKind::Container,
+                    &[("172.17.0.1", 16)],
+                ),
             ],
             vec![default_route(2, "192.168.1.1", 100)],
         );
@@ -764,7 +877,9 @@ mod tests {
             vec![default_route(2, "192.168.1.1", 600)],
         );
         assert_eq!(
-            select_address(&state, &SelectionConfig::default()).unwrap().interface,
+            select_address(&state, &SelectionConfig::default())
+                .unwrap()
+                .interface,
             "wlo1"
         );
 
@@ -893,6 +1008,120 @@ mod tests {
 
     #[test]
     fn schema_version_is_stamped_on_new_states() {
-        assert_eq!(NetworkState::new(vec![], vec![]).schema_version, SCHEMA_VERSION);
+        assert_eq!(
+            NetworkState::new(vec![], vec![]).schema_version,
+            SCHEMA_VERSION
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Failure messages
+    //
+    // A tool that reports "no address" is only useful if it says why, and the
+    // modal disqualification is not always the honest answer.
+    // -----------------------------------------------------------------------
+
+    fn why(state: &NetworkState, config: &SelectionConfig) -> String {
+        select(state, config).failure_reason(config)
+    }
+
+    #[test]
+    fn no_routable_address_of_the_requested_family_says_so() {
+        // The real shape of an IPv6 request on a network that hands out no
+        // IPv6: a dozen veths carrying fe80:: and nothing else. Counting
+        // disqualifications would blame Docker for the router's DHCP.
+        let reason = why(&dev_host_without_global_v6(), &wants_ipv6());
+        assert!(
+            reason.contains("no ipv6 address another device could reach"),
+            "unhelpful: {reason}"
+        );
+        assert!(
+            !reason.contains("container"),
+            "blames the veths for the network's missing IPv6: {reason}"
+        );
+    }
+
+    #[test]
+    fn the_scopes_that_were_found_are_named() {
+        // Listed alphabetically so the sentence is identical on every run,
+        // rather than following whatever order the kernel enumerated.
+        let reason = why(&dev_host_without_global_v6(), &wants_ipv6());
+        assert!(
+            reason.ends_with("(only link-local and loopback)"),
+            "{reason}"
+        );
+    }
+
+    #[test]
+    fn a_disconnected_machine_is_not_blamed_on_its_containers() {
+        // Offline laptop running Docker: loopback plus routeless bridges. The
+        // count is dominated by the bridges, but the story is "you are
+        // offline".
+        let state = NetworkState::new(
+            vec![
+                iface("lo", 1, InterfaceKind::Loopback, &[("127.0.0.1", 8)]),
+                iface(
+                    "docker0",
+                    4,
+                    InterfaceKind::Container,
+                    &[("172.17.0.1", 16)],
+                ),
+            ],
+            vec![],
+        );
+        // `172.17.0.1` is private, so it *is* peer-reachable in principle and
+        // the reachability shortcut correctly declines to fire — the modal
+        // reason really is the right answer here.
+        let reason = why(&state, &SelectionConfig::default());
+        assert!(reason.contains("no route to anywhere"), "{reason}");
+    }
+
+    #[test]
+    fn narrowing_the_search_is_reported_as_narrowing() {
+        let requiring = SelectionConfig {
+            require_interface: Some("eno2".to_string()),
+            ..SelectionConfig::default()
+        };
+        assert_eq!(
+            why(&dev_host(), &requiring),
+            "the requested interface has no usable addresses"
+        );
+
+        let excluding = SelectionConfig {
+            exclude_interfaces: vec!["*".to_string()],
+            ..SelectionConfig::default()
+        };
+        assert_eq!(
+            why(&dev_host(), &excluding),
+            "every interface was excluded by configuration"
+        );
+    }
+
+    #[test]
+    fn a_machine_with_no_addresses_at_all_says_that() {
+        let state = NetworkState::new(vec![iface("eno1", 2, InterfaceKind::Ethernet, &[])], vec![]);
+        assert_eq!(
+            why(&state, &SelectionConfig::default()),
+            "no interfaces reported any addresses"
+        );
+    }
+
+    fn wants_ipv6() -> SelectionConfig {
+        SelectionConfig {
+            prefer_family: FamilyPreference::Ipv6,
+            ..SelectionConfig::default()
+        }
+    }
+
+    /// The development host as it looks on a network with no IPv6: the global
+    /// `2606:…` address gone, link-local ones left behind.
+    fn dev_host_without_global_v6() -> NetworkState {
+        let mut state = dev_host();
+        for interface in &mut state.interfaces {
+            interface
+                .addresses
+                .retain(|a| a.scope != AddressScope::Global);
+        }
+        state
     }
 }

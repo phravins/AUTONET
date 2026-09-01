@@ -110,7 +110,12 @@ impl Config {
         }
         std::env::var_os("HOME")
             .filter(|h| !h.is_empty())
-            .map(|home| PathBuf::from(home).join(".config").join("autonet").join("config.toml"))
+            .map(|home| {
+                PathBuf::from(home)
+                    .join(".config")
+                    .join("autonet")
+                    .join("config.toml")
+            })
     }
 
     /// Parse configuration from a TOML string.
@@ -298,9 +303,18 @@ mod tests {
 
     #[test]
     fn family_preference_parsing() {
-        assert_eq!("ipv4".parse::<FamilyPreference>().unwrap(), FamilyPreference::Ipv4);
-        assert_eq!("V6".parse::<FamilyPreference>().unwrap(), FamilyPreference::Ipv6);
-        assert_eq!("  any ".parse::<FamilyPreference>().unwrap(), FamilyPreference::Any);
+        assert_eq!(
+            "ipv4".parse::<FamilyPreference>().unwrap(),
+            FamilyPreference::Ipv4
+        );
+        assert_eq!(
+            "V6".parse::<FamilyPreference>().unwrap(),
+            FamilyPreference::Ipv6
+        );
+        assert_eq!(
+            "  any ".parse::<FamilyPreference>().unwrap(),
+            FamilyPreference::Any
+        );
         assert!("ipv5".parse::<FamilyPreference>().is_err());
     }
 

@@ -71,4 +71,4 @@ pub use model::{
     Address, AddressScope, Family, FamilyPreference, Interface, InterfaceFlags, InterfaceKind,
     InterfaceState, IpNetwork, NetworkState, Route, SCHEMA_VERSION,
 };
-pub use select::{select, select_address, Candidate, Disqualification, Selection, SelectedAddress};
+pub use select::{select, select_address, Candidate, Disqualification, SelectedAddress, Selection};

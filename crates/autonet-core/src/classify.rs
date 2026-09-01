@@ -252,20 +252,32 @@ mod tests {
     #[test]
     fn ipv4_loopback() {
         assert_eq!(classify_ipv4(&v4("127.0.0.1")), AddressScope::Loopback);
-        assert_eq!(classify_ipv4(&v4("127.255.255.254")), AddressScope::Loopback);
+        assert_eq!(
+            classify_ipv4(&v4("127.255.255.254")),
+            AddressScope::Loopback
+        );
     }
 
     #[test]
     fn ipv4_link_local() {
         assert_eq!(classify_ipv4(&v4("169.254.0.1")), AddressScope::LinkLocal);
-        assert_eq!(classify_ipv4(&v4("169.254.255.255")), AddressScope::LinkLocal);
+        assert_eq!(
+            classify_ipv4(&v4("169.254.255.255")),
+            AddressScope::LinkLocal
+        );
         // Just outside the /16.
         assert_eq!(classify_ipv4(&v4("169.253.255.255")), AddressScope::Global);
     }
 
     #[test]
     fn ipv4_private_ranges() {
-        for ip in ["10.0.0.1", "10.255.255.255", "172.16.0.1", "172.31.255.255", "192.168.1.101"] {
+        for ip in [
+            "10.0.0.1",
+            "10.255.255.255",
+            "172.16.0.1",
+            "172.31.255.255",
+            "192.168.1.101",
+        ] {
             assert_eq!(classify_ipv4(&v4(ip)), AddressScope::Private, "{ip}");
         }
         // Docker's default bridge, and the user-defined-network bridges on this host.
@@ -332,7 +344,10 @@ mod tests {
     #[test]
     fn ipv6_unique_local_covers_fc_and_fd() {
         assert_eq!(classify_ipv6(&v6("fc00::1")), AddressScope::UniqueLocal);
-        assert_eq!(classify_ipv6(&v6("fd12:3456::1")), AddressScope::UniqueLocal);
+        assert_eq!(
+            classify_ipv6(&v6("fd12:3456::1")),
+            AddressScope::UniqueLocal
+        );
         assert_eq!(classify_ipv6(&v6("fdff::1")), AddressScope::UniqueLocal);
     }
 
@@ -340,13 +355,22 @@ mod tests {
     fn ipv6_global() {
         // A well-known public address rather than a real host's, so that
         // fixtures and tests carry nobody's identifying prefix.
-        assert_eq!(classify_ipv6(&v6("2606:4700:4700::1111")), AddressScope::Global);
-        assert_eq!(classify_ipv6(&v6("2a00:1450:4009:81f::200e")), AddressScope::Global);
+        assert_eq!(
+            classify_ipv6(&v6("2606:4700:4700::1111")),
+            AddressScope::Global
+        );
+        assert_eq!(
+            classify_ipv6(&v6("2a00:1450:4009:81f::200e")),
+            AddressScope::Global
+        );
     }
 
     #[test]
     fn ipv4_mapped_is_judged_by_its_ipv4() {
-        assert_eq!(classify_ipv6(&v6("::ffff:192.168.1.1")), AddressScope::Private);
+        assert_eq!(
+            classify_ipv6(&v6("::ffff:192.168.1.1")),
+            AddressScope::Private
+        );
         assert_eq!(classify_ipv6(&v6("::ffff:8.8.8.8")), AddressScope::Global);
     }
 
@@ -448,7 +472,10 @@ mod tests {
             classify_interface("anything", None, true, false),
             InterfaceKind::Loopback
         );
-        assert_eq!(classify_interface("lo", None, false, false), InterfaceKind::Loopback);
+        assert_eq!(
+            classify_interface("lo", None, false, false),
+            InterfaceKind::Loopback
+        );
     }
 
     #[test]

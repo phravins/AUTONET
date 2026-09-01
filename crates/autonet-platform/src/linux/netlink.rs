@@ -246,8 +246,7 @@ fn address_from(message: &AddressMessage) -> Option<Address> {
     // means a privacy-extension address, which is rotated out from under
     // whoever you gave it to; on IPv4 it just means a second address on the
     // interface, which is perfectly stable. Hence the family check.
-    let is_temporary =
-        ip.is_ipv6() && has(AddressFlags::Secondary, AddressHeaderFlags::Secondary);
+    let is_temporary = ip.is_ipv6() && has(AddressFlags::Secondary, AddressHeaderFlags::Secondary);
 
     let mut result = Address::new(ip, message.header.prefix_len);
     result.is_temporary = is_temporary;
@@ -396,7 +395,10 @@ mod tests {
             interface_state(None, LinkFlags::empty()),
             InterfaceState::Down
         );
-        assert_eq!(interface_state(None, LinkFlags::Up), InterfaceState::Unknown);
+        assert_eq!(
+            interface_state(None, LinkFlags::Up),
+            InterfaceState::Unknown
+        );
     }
 
     #[test]

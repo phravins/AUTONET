@@ -143,7 +143,10 @@ impl AddressScope {
     /// device on the LAN as a destination.
     #[must_use]
     pub fn is_reachable_by_peers(self) -> bool {
-        matches!(self, Self::Private | Self::UniqueLocal | Self::Global | Self::Cgnat)
+        matches!(
+            self,
+            Self::Private | Self::UniqueLocal | Self::Global | Self::Cgnat
+        )
     }
 }
 
@@ -352,7 +355,12 @@ pub struct Interface {
 impl Interface {
     /// A minimal interface, for tests and fixtures.
     #[must_use]
-    pub fn new(name: impl Into<String>, index: u32, kind: InterfaceKind, state: InterfaceState) -> Self {
+    pub fn new(
+        name: impl Into<String>,
+        index: u32,
+        kind: InterfaceKind,
+        state: InterfaceState,
+    ) -> Self {
         Self {
             name: name.into(),
             index,

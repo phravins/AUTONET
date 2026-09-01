@@ -73,6 +73,22 @@ fields because conflating them is the mistake AutoNet exists to prevent.
 Still valid JSON, still exit code `1`. A client should check `selected` for
 `null` rather than assuming a non-zero exit means no output.
 
+`error` is prose intended for a human, and its wording is **not** part of this
+contract — do not parse it. It reports whichever of these is the real story:
+
+| Situation | Wording |
+|---|---|
+| No interface reported any address | `no interfaces reported any addresses` |
+| Nothing of the requested family is reachable | `this machine has no ipv6 address another device could reach (only link-local and loopback)` |
+| `require_interface` matched, but that interface is unusable | `the requested interface has no usable addresses` |
+| `exclude_interfaces` removed everything | `every interface was excluded by configuration` |
+| Otherwise | `all N candidate address(es) were rejected; most common reason: …` |
+
+The middle rows exist because the modal disqualification is not always the
+honest answer. Asking for IPv6 on a network that provides none, on a machine
+running Docker, would otherwise blame a dozen veth pairs for the router's DHCP.
+Use `candidates` (with `-v`) when you need to reason about a failure in code.
+
 ## `autonet ip --json`
 
 The selected address on its own, with `schema_version` merged in — the smallest

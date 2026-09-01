@@ -51,7 +51,9 @@ pub fn status(ctx: &Context, args: &GlobalArgs) -> Result<(), CliError> {
     // to find out *why* nothing works still needs to see the candidate list —
     // but the exit code still says failure so scripts are not misled.
     if selection.selected.is_none() {
-        return Err(CliError::NoAddress(selection.failure_reason()));
+        return Err(CliError::NoAddress(
+            selection.failure_reason(&ctx.config.selection),
+        ));
     }
     Ok(())
 }
@@ -78,7 +80,7 @@ fn status_json(
                 });
             }
         }
-        None => payload["error"] = json!(selection.failure_reason()),
+        None => payload["error"] = json!(selection.failure_reason(&ctx.config.selection)),
     }
 
     if args.verbose {
@@ -148,7 +150,7 @@ fn status_text(
             out,
             "  {} {}",
             theme.bad("No usable address."),
-            selection.failure_reason()
+            selection.failure_reason(&ctx.config.selection)
         );
     }
 
@@ -255,12 +257,14 @@ pub fn ip(ctx: &Context, args: &GlobalArgs) -> Result<(), CliError> {
                 to_json_line(&json!({
                     "schema_version": autonet_core::SCHEMA_VERSION,
                     "ip": serde_json::Value::Null,
-                    "error": selection.failure_reason(),
+                    "error": selection.failure_reason(&ctx.config.selection),
                 }))
                 .trim_end()
             );
         }
-        return Err(CliError::NoAddress(selection.failure_reason()));
+        return Err(CliError::NoAddress(
+            selection.failure_reason(&ctx.config.selection),
+        ));
     };
 
     if args.json {

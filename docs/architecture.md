@@ -47,7 +47,7 @@ tested against JSON snapshots in [`tests/fixtures/`](../tests/fixtures):
 
 | Fixture | What it proves |
 |---|---|
-| `this-machine.json` | 23 interfaces, nine Docker bridges, eleven veths — still returns the Wi-Fi address |
+| `this-machine.json` | 23 interfaces — nine bridges, eleven veths, one Wi-Fi card — still returns the Wi-Fi address |
 | `wifi-and-ethernet.json` | A docked laptop prefers the wired link |
 | `wifi-plus-vpn.json` | A VPN owning a lower-metric default route does not hijack the answer |
 | `docker-only.json` | An offline laptop running Docker reports failure, not `172.17.0.1` |

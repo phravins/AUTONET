@@ -22,7 +22,10 @@ fn the_snapshot_describes_a_plausible_machine() {
     let state = provider.snapshot().expect("a snapshot");
 
     assert_eq!(state.schema_version, autonet_core::SCHEMA_VERSION);
-    assert!(state.captured_at.is_some(), "snapshot should be timestamped");
+    assert!(
+        state.captured_at.is_some(),
+        "snapshot should be timestamped"
+    );
 
     // Every operating system AutoNet supports has a loopback interface. If this
     // fails, the enumeration is broken rather than the machine being unusual.
