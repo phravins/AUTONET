@@ -7,7 +7,7 @@
 //! |---|---|
 //! | `getifaddrs(3)` | interfaces, addresses, link flags, MAC, MTU |
 //! | SystemConfiguration | what *sort* of device each interface is |
-//! | `PF_ROUTE` / `NET_RT_DUMP2` | routes, gateways, the default route |
+//! | `PF_ROUTE` / `NET_RT_DUMP` | routes, gateways, the default route |
 //!
 //! # Why not just names
 //!
@@ -21,18 +21,19 @@
 //!
 //! # Status
 //!
-//! **Unverified.** Written without access to a Mac. Every claim about struct
-//! layout, sysctl behaviour and SystemConfiguration coverage here is derived
-//! from documentation, not from a running system, and must be confirmed on
-//! hardware before this backend is trusted.
+//! **Unverified on hardware.** Written without access to a Mac. Struct sizes
+//! and field offsets are checked against `libc` at compile time, but every
+//! claim about sysctl behaviour, ioctl semantics and SystemConfiguration
+//! coverage is derived from documentation, not from a running system, and must
+//! be confirmed on hardware before this backend is trusted.
 //!
-//! Only the first two of the three sources above are implemented. Until routes
-//! exist, the selection engine has no default-route evidence on macOS and its
-//! choice of address should not be relied on — see [`snapshot`].
-//!
-//! [`snapshot`]: MacosProvider::snapshot
+//! All three sources are now implemented. What routes do *not* yet carry is a
+//! meaningful metric: macOS has no per-route metric, so two default routes
+//! currently tie and are broken by interface index rather than by the service
+//! order set in System Settings — see [`route`].
 
 mod ifaddrs;
+mod route;
 mod scnetwork;
 
 use autonet_core::model::NetworkState;
@@ -53,17 +54,19 @@ impl MacosProvider {
 }
 
 impl NetworkProvider for MacosProvider {
-    /// Capture interfaces, their addresses, and what sort of device each is.
+    /// Capture interfaces, their addresses, what sort of device each is, and
+    /// the routing table.
     ///
     /// SystemConfiguration is queried first, once, and the resulting map is
     /// handed to the `getifaddrs` walk — so the two sources are joined while
-    /// both are fresh, rather than the walk re-querying per interface.
-    ///
-    /// **Incomplete.** The returned state still carries no routes, which is
-    /// where the strongest evidence for selection lives. The snapshot is honest
-    /// about what it knows; it is not yet enough for selection to be trusted.
+    /// both are fresh, rather than the walk re-querying per interface. Routes
+    /// come last, in the same order as the Linux backend's `collect`, and join
+    /// back to the interfaces on the kernel's own interface index.
     fn snapshot(&self) -> Result<NetworkState, PlatformError> {
-        ifaddrs::snapshot(&scnetwork::interface_types())
+        let interfaces = ifaddrs::interfaces(&scnetwork::interface_types())?;
+        let routes = route::dump_routes()?;
+
+        Ok(NetworkState::new(interfaces, routes).captured_now())
     }
 
     fn platform_name(&self) -> &'static str {

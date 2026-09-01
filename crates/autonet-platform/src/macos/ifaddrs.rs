@@ -31,14 +31,13 @@ use std::collections::{BTreeMap, HashMap};
 use std::ffi::CStr;
 use std::net::{IpAddr, Ipv6Addr};
 
-use autonet_core::model::{
-    Address, Interface, InterfaceFlags, InterfaceKind, InterfaceState, NetworkState,
-};
+use autonet_core::model::{Address, Interface, InterfaceFlags, InterfaceKind, InterfaceState};
 use if_addrs::IfAddr;
 use libc::{c_int, c_uint};
 
 use crate::hwaddr::format_mac;
 use crate::linktype::{self, Evidence, ScType, UNCLASSIFIED};
+use crate::rtparse::strip_embedded_scope_id;
 use crate::PlatformError;
 
 /// What SystemConfiguration calls each interface, keyed by BSD name.
@@ -50,14 +49,14 @@ type ScTypes = HashMap<String, ScType>;
 
 /// Capture the machine's interfaces and their addresses.
 ///
-/// Routes are not collected yet, so the returned state has none. Until they
-/// are, selection has no default-route evidence to work with on macOS and its
-/// answer should not be trusted.
-pub(crate) fn snapshot(sc_types: &ScTypes) -> Result<NetworkState, PlatformError> {
+/// Routes come from a separate source — see [`super::route`] — and are joined
+/// on the interface index by the caller, mirroring how the Linux backend keeps
+/// its link, address and route dumps as three distinct netlink queries.
+pub(crate) fn interfaces(sc_types: &ScTypes) -> Result<Vec<Interface>, PlatformError> {
     let mut interfaces = links(sc_types)?;
     attach_addresses(&mut interfaces)?;
 
-    Ok(NetworkState::new(interfaces.into_values().collect(), Vec::new()).captured_now())
+    Ok(interfaces.into_values().collect())
 }
 
 // ---------------------------------------------------------------------------
@@ -275,42 +274,169 @@ fn mtu_of(entry: &libc::ifaddrs) -> Option<u32> {
 fn attach_addresses(interfaces: &mut BTreeMap<String, Interface>) -> Result<(), PlatformError> {
     let reported =
         if_addrs::get_if_addrs().map_err(|e| PlatformError::query("list IP addresses", e))?;
+    let v6_flags = V6Flags::open();
 
     for record in reported {
-        let (ip, prefix_len) = match record.addr {
-            IfAddr::V4(v4) => (IpAddr::V4(v4.ip), v4.prefixlen),
-            IfAddr::V6(v6) => (IpAddr::V6(strip_embedded_scope_id(v6.ip)), v6.prefixlen),
+        let (ip, prefix_len, is_temporary) = match record.addr {
+            IfAddr::V4(v4) => (IpAddr::V4(v4.ip), v4.prefixlen, false),
+            IfAddr::V6(v6) => {
+                // Asked with the *raw* address, before the KAME strip below:
+                // the embedded scope id is what the kernel has in its own
+                // table, so the stripped form would not be found.
+                let flags = v6_flags.of(&record.name, v6.ip).unwrap_or(0);
+
+                // An address that lost duplicate-address detection is in use by
+                // another host on the segment. Linux drops those via
+                // `IFA_F_DADFAILED`; this is macOS's spelling of the same fact.
+                if flags & in6_iff::DUPLICATED != 0 {
+                    continue;
+                }
+
+                (
+                    IpAddr::V6(strip_embedded_scope_id(v6.ip)),
+                    v6.prefixlen,
+                    flags & in6_iff::TEMPORARY != 0,
+                )
+            }
         };
 
         let (name, index) = (record.name, record.index);
         interfaces
             .entry(name.clone())
             .or_insert_with(|| orphan(&name, index))
+            .addresses
             // `Address::new` derives family and scope from the IP itself, which
             // is why no scope logic appears in this crate.
-            .addresses
-            .push(Address::new(ip, prefix_len));
+            .push(Address {
+                is_temporary,
+                ..Address::new(ip, prefix_len)
+            });
     }
 
     Ok(())
 }
 
-/// Undo the KAME scope-id embedding in a link-local IPv6 address.
+// ---------------------------------------------------------------------------
+// Per-address IPv6 flags
+// ---------------------------------------------------------------------------
+
+/// The per-address IPv6 flags, from `<netinet6/in6_var.h>`.
 ///
-/// BSD kernels, macOS among them, store the interface index *inside* the
-/// address — octets 2 and 3 of an `fe80::/10` address — as well as in
-/// `sin6_scope_id`. `getifaddrs` returns that raw form, so the link-local
-/// address of interface 5 arrives looking like `fe80:5::…`. RFC 4291 requires
-/// those octets to be zero in a real link-local address, so clearing them
-/// repairs a known kernel quirk rather than guessing, and it is a no-op on any
-/// address that does not carry it.
-fn strip_embedded_scope_id(ip: Ipv6Addr) -> Ipv6Addr {
-    let mut octets = ip.octets();
-    if octets[0] == 0xfe && octets[1] & 0xc0 == 0x80 {
-        octets[2] = 0;
-        octets[3] = 0;
+/// Absent from `libc` entirely, like the `IFT_*` constants in
+/// [`crate::linktype`], so they are restated here.
+mod in6_iff {
+    use libc::c_int;
+
+    /// The address lost duplicate-address detection.
+    pub const DUPLICATED: c_int = 0x0004;
+    /// An RFC 4941 privacy address: randomised, short-lived, and rotated.
+    pub const TEMPORARY: c_int = 0x0080;
+}
+
+/// `SIOCGIFAFLAG_IN6`, which is `_IOWR('i', 73, struct in6_ifreq)`.
+///
+/// **Computed, not read from a header** — `libc` does not define it. Darwin's
+/// `_IOWR` packs the argument's size into the request number:
+///
+/// ```text
+/// IOC_INOUT | ((len & 0x1fff) << 16) | (group << 8) | number
+/// 0xc0000000 | (288 << 16)           | ('i' << 8)   | 73     =  0xc1206949
+/// ```
+///
+/// The size is the dangerous part: a wrong `len` does not fail, it issues *a
+/// different ioctl*. The assertion below is what makes that a build failure
+/// instead — 288 is the size of `in6_ifreq` on both Darwin targets, which is
+/// larger than it looks because the union carries `in6_ifstat` and
+/// `icmp6_ifstat`.
+const SIOCGIFAFLAG_IN6: libc::c_ulong = 0xc120_6949;
+
+const _: () = {
+    assert!(std::mem::size_of::<libc::in6_ifreq>() == 288);
+    assert!(SIOCGIFAFLAG_IN6 == 0xc000_0000 | (0x120 << 16) | (0x69 << 8) | 0x49);
+};
+
+/// A socket kept open for the duration of one address pass.
+///
+/// One socket for every IPv6 address on the machine rather than one per
+/// address: the ioctl needs *a* socket of the right family, not a connection,
+/// and opening a descriptor per address would be a syscall per address for no
+/// benefit.
+struct V6Flags(Option<c_int>);
+
+impl V6Flags {
+    /// Open the socket, or record that there is none.
+    ///
+    /// Failure is not an error. A machine with IPv6 disabled cannot open an
+    /// `AF_INET6` socket, and on such a machine there are no IPv6 addresses to
+    /// ask about anyway. Degrading to "no flags known" costs the `is_temporary`
+    /// marking; failing the snapshot would cost the user every address.
+    fn open() -> Self {
+        // SAFETY: `socket` takes no memory from us and returns -1 on failure.
+        let fd = unsafe { libc::socket(libc::AF_INET6, libc::SOCK_DGRAM, 0) };
+        Self((fd >= 0).then_some(fd))
     }
-    Ipv6Addr::from(octets)
+
+    /// The kernel's flags for one address on one interface.
+    ///
+    /// `None` when the query could not be made — no socket, a name too long for
+    /// `ifr_name`, or an ioctl that failed because the address disappeared
+    /// between `getifaddrs` and now. The caller treats all of those as "no
+    /// flags set", which is the conservative answer: an address is reported as
+    /// permanent unless the kernel says otherwise, so an unanswered query can
+    /// never invent a reason to drop or penalise a usable address.
+    fn of(&self, name: &str, ip: Ipv6Addr) -> Option<c_int> {
+        let fd = self.0?;
+
+        // Zeroed first, which also supplies `ifr_name`'s terminator.
+        // SAFETY: `in6_ifreq` is plain data; an all-zero value is valid.
+        let mut request: libc::in6_ifreq = unsafe { std::mem::zeroed() };
+
+        // Strictly less than, so the name stays null-terminated.
+        if name.len() >= request.ifr_name.len() {
+            return None;
+        }
+        // SAFETY: the length is bounds-checked above, and `ifr_name` is a byte
+        // buffer as far as the kernel is concerned — copying through a `u8`
+        // pointer avoids a signedness cast on `c_char`.
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                name.as_ptr(),
+                request.ifr_name.as_mut_ptr().cast::<u8>(),
+                name.len(),
+            );
+        }
+
+        // The address goes in through the same union the flags come back out
+        // of — that is how this ioctl is defined, not an oversight.
+        let mut addr: libc::sockaddr_in6 = unsafe { std::mem::zeroed() };
+        addr.sin6_len = u8::try_from(std::mem::size_of::<libc::sockaddr_in6>()).ok()?;
+        addr.sin6_family = u8::try_from(libc::AF_INET6).ok()?;
+        addr.sin6_addr = libc::in6_addr {
+            s6_addr: ip.octets(),
+        };
+        request.ifr_ifru.ifru_addr = addr;
+
+        // SAFETY: `fd` is a live socket owned by `self`, and `request` is a
+        // fully initialised `in6_ifreq` — the type whose size is encoded in
+        // `SIOCGIFAFLAG_IN6` and checked at compile time above.
+        if unsafe { libc::ioctl(fd, SIOCGIFAFLAG_IN6, &raw mut request) } != 0 {
+            return None;
+        }
+
+        // SAFETY: on success the kernel has overwritten the union with the
+        // flags, so `ifru_flags6` is the initialised member.
+        Some(unsafe { request.ifr_ifru.ifru_flags6 })
+    }
+}
+
+impl Drop for V6Flags {
+    fn drop(&mut self) {
+        if let Some(fd) = self.0 {
+            // SAFETY: `fd` came from `socket` and is closed exactly once,
+            // because `V6Flags` owns it and is not `Copy`.
+            unsafe { libc::close(fd) };
+        }
+    }
 }
 
 /// An interface that appeared in the address list but not in the link walk.

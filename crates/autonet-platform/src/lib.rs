@@ -46,6 +46,15 @@ mod hwaddr;
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 mod linktype;
 
+// Reading BSD routing-socket messages, for the same reason and on the same
+// terms as `linktype` above. It matters more here: sockaddr padding and
+// netmask truncation fail *quietly*, producing plausible wrong addresses rather
+// than an error, so its hand-built-buffer tests need to run somewhere the
+// failure can actually be debugged.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+mod rtparse;
+
 #[cfg(target_os = "linux")]
 mod linux;
 
