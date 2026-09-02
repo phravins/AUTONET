@@ -92,7 +92,14 @@ fn an_unparseable_family_fails_rather_than_falling_back() {
 // Gated on the platforms with a backend: elsewhere `provider()` returns
 // `Unsupported`, and asserting that a snapshot describes the machine would be
 // asserting that AutoNet has been ported.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+//
+// Windows joins as of 2b Task 2, which is the first change to make its snapshot
+// describe a real machine. Note what these tests do and do not prove there:
+// they assert invariants — one address on stdout, a loopback interface present,
+// MACs withheld without `-v`, JSON that round-trips — which a CI VM with one
+// virtual NIC can satisfy. They cannot prove the *right* address was chosen,
+// because a runner has only one to choose from.
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 mod live {
     use std::net::IpAddr;
 

@@ -34,7 +34,7 @@ use autonet_core::model::NetworkState;
 // reportable MAC is a decision about AutoNet's output, and the two must not
 // drift. Gated on the platforms that have a backend so that a target with none
 // still compiles warning-free, as the module documentation above promises.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 mod hwaddr;
 
 // Deciding what *sort* of device an interface is, on macOS. Compiled on Linux
@@ -42,7 +42,13 @@ mod hwaddr;
 // tests run on the Linux job as well as the macOS one. Task 2 put its logic
 // inside the `cfg`-gated backend and consequently could only be tested on a
 // runner none of us can debug on; keeping the pure part out here is the fix.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+//
+// Windows compiles it for one constant only: `UNCLASSIFIED`, the placeholder
+// every adapter carries until Windows Task 3 writes its own `IfType` table. The
+// alternative was a second spelling of the same string in the Windows backend,
+// which is how two platforms end up disagreeing about a value that appears in
+// `--json`.
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 mod linktype;
 
@@ -62,6 +68,16 @@ mod rtparse;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 mod servicerank;
+
+// Decoding what the IP Helper API hands back, on the same terms as `rtparse`
+// above and for the same reason. A Windows `sockaddr` has no `sa_len` and puts
+// `AF_INET6` at 23 rather than 30 or 10, so an offset or constant error here
+// produces a plausible *wrong address* rather than a failure — and the Windows
+// CI runner is the one machine in this project nobody can attach a debugger to.
+// Keeping the decode out here means its hand-built-buffer tests run on Linux.
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+mod winparse;
 
 #[cfg(target_os = "linux")]
 mod linux;
@@ -101,12 +117,6 @@ pub enum PlatformError {
 
 impl PlatformError {
     /// Wrap an arbitrary platform error with the operation that produced it.
-    // TEMPORARY. The Windows backend is still a scaffold with no failure path,
-    // so this is genuinely dead code there and `-D warnings` rejects it. Delete
-    // this attribute once windows/mod.rs makes its first IP Helper call, in
-    // Task 2. The macOS backend carried the identical attribute through its own
-    // Task 1 and shed it in Task 4.
-    #[cfg_attr(target_os = "windows", allow(dead_code))]
     pub(crate) fn query(operation: &'static str, error: impl std::fmt::Display) -> Self {
         Self::Query {
             operation,
