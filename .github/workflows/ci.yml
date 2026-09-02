@@ -3,11 +3,19 @@ name: CI
 # AutoNet's whole design rests on autonet-core being platform-free and
 # autonet-platform being the only crate that talks to a kernel. That claim is
 # only worth anything if it is checked on more than one kernel, so every push
-# builds and tests on both Linux and macOS.
+# builds and tests on Linux, macOS and Windows.
 #
 # The live checks in crates/autonet-platform/tests/live.rs are deliberately
 # *not* run here. They depend on which network the runner happens to be on, and
 # a failure would say nothing about the code.
+#
+# What a green run does and does not prove. It proves each backend compiles and
+# links against its real system libraries, that the platform-free logic passes
+# on three kernels, and that the right arm of `provider()` is selected on each.
+# It proves nothing about interface classification, routes, or VPNs: every
+# runner is a VM with one virtual NIC, no Wi-Fi radio and no tunnel. Those
+# claims only become true on real hardware — see
+# docs/milestone-2a-acceptance.md for what that costs.
 
 on:
   push:
@@ -29,11 +37,12 @@ jobs:
     name: ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     strategy:
-      # Report both platforms rather than cancelling the survivor: "does this
-      # fail everywhere or only on macOS?" is the first question worth asking.
+      # Report every platform rather than cancelling the survivors: "does this
+      # fail everywhere or only on Windows?" is the first question worth asking,
+      # and it is unanswerable if the first red job kills the other two.
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest, macos-latest, windows-latest]
 
     steps:
       - uses: actions/checkout@v4

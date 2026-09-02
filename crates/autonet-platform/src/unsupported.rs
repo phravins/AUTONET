@@ -1,9 +1,11 @@
 //! Placeholder backend for platforms AutoNet does not support yet.
 //!
-//! This exists so the workspace **compiles** everywhere. A developer on macOS
-//! can build, run the full test suite, and work on the CLI before the macOS
-//! backend lands in M2; only commands that actually need live network state
-//! fail, and they fail with a clear message instead of a link error.
+//! This exists so the workspace **compiles** everywhere. Linux, macOS and
+//! Windows now have backends of their own, so this is what a developer on any
+//! fourth platform gets: build, run the full test suite, and work on the CLI
+//! before a backend for it exists. Only commands that actually need live
+//! network state fail, and they fail with a clear message instead of a link
+//! error.
 
 use autonet_core::model::NetworkState;
 

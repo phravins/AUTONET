@@ -263,9 +263,16 @@ them agree with each other.
 
 | Platform | Status |
 |---|---|
-| Linux | Implemented, via netlink |
-| macOS | Planned (M2) |
-| Windows | Planned (M2) |
+| Linux | Implemented and running, via netlink |
+| macOS | Implemented, via SystemConfiguration and `PF_ROUTE` — **not yet verified on hardware** |
+| Windows | In progress (M2b), via the IP Helper API |
+
+macOS's caveat is deliberate and not modesty. That backend was written without
+access to a Mac; CI builds and tests it on `macos-latest`, but that runner has
+no Wi-Fi radio and no VPN, so the two things the backend most needs to get right
+have never been observed. [`docs/milestone-2a-acceptance.md`](docs/milestone-2a-acceptance.md)
+is the checklist that will change this line, and until someone runs it the line
+stays as it is.
 
 Unsupported platforms compile and fail at *runtime* with a clear message, so the
 whole workspace can be built and tested from any machine.
@@ -275,7 +282,8 @@ whole workspace can be built and tested from any machine.
 Milestone 1 (discovery, selection, `status` / `ip` / `interfaces` / `routes`) is
 complete. Planned next, in order:
 
-- **M2** macOS and Windows backends
+- **M2a** macOS backend — written, awaiting hardware acceptance
+- **M2b** Windows backend — in progress
 - **M3** `autonet run` — run an existing app unmodified with `AUTONET_IP`,
   `AUTONET_HOST` and `AUTONET_URL` injected
 - **M4** `autonet watch` — react to Wi-Fi ↔ Ethernet switches, VPNs coming up,

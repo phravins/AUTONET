@@ -112,8 +112,9 @@ It contains no networking logic at all. `run.rs` holds one function per command;
 
 Nothing above `autonet-platform` changes. Unsupported platforms keep compiling
 via `src/unsupported.rs`, which returns `PlatformError::Unsupported` at runtime —
-so a Windows developer can build and test the whole workspace before the Windows
-backend exists.
+so a developer on a platform without a backend can build and test the whole
+workspace before one exists, as macOS and Windows developers could before theirs
+did.
 
 The backend's whole job is translation. It must not filter, prefer, or rank
 anything: policy behind a `#[cfg]` is policy that cannot be fixture-tested.
@@ -150,7 +151,8 @@ test guards the format against accidental drift.
 | | Scope | Status |
 |---|---|---|
 | M1 | Workspace, Nix, Linux discovery, data model, selection engine, `status` / `ip` / `interfaces` / `routes`, `--json` | Complete |
-| M2 | macOS and Windows backends | Planned |
+| M2a | macOS backend — `getifaddrs`, SystemConfiguration, `PF_ROUTE` | Written; hardware acceptance outstanding |
+| M2b | Windows backend — IP Helper (`GetAdaptersAddresses`, `GetIpForwardTable2`) | In progress |
 | M3 | `autonet run` — inject `AUTONET_IP`, `AUTONET_HOST`, `AUTONET_URL` | Planned |
 | M4 | `autonet watch` — network change events | Planned |
 | M5 | Daemon with a local HTTP API over a Unix socket / named pipe | Planned |

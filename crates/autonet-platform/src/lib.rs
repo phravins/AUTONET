@@ -17,9 +17,9 @@
 //! Implement [`NetworkProvider`] and wire it into [`provider`] behind a
 //! `#[cfg(target_os = ...)]`. Nothing above this crate changes. Platforms
 //! without a backend yet still *compile*, and fail at runtime with
-//! [`PlatformError::Unsupported`] rather than at build time — a Windows
-//! developer can build and test the whole workspace before the Windows
-//! backend exists.
+//! [`PlatformError::Unsupported`] rather than at build time — a developer on
+//! FreeBSD can build and test the whole workspace before a FreeBSD backend
+//! exists, exactly as macOS and Windows developers could before theirs did.
 
 #![deny(missing_docs)]
 #![warn(clippy::pedantic)]
@@ -69,7 +69,10 @@ mod linux;
 #[cfg(target_os = "macos")]
 mod macos;
 
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+#[cfg(target_os = "windows")]
+mod windows;
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 mod unsupported;
 
 /// Something went wrong while asking the operating system about its network.
@@ -98,6 +101,12 @@ pub enum PlatformError {
 
 impl PlatformError {
     /// Wrap an arbitrary platform error with the operation that produced it.
+    // TEMPORARY. The Windows backend is still a scaffold with no failure path,
+    // so this is genuinely dead code there and `-D warnings` rejects it. Delete
+    // this attribute once windows/mod.rs makes its first IP Helper call, in
+    // Task 2. The macOS backend carried the identical attribute through its own
+    // Task 1 and shed it in Task 4.
+    #[cfg_attr(target_os = "windows", allow(dead_code))]
     pub(crate) fn query(operation: &'static str, error: impl std::fmt::Display) -> Self {
         Self::Query {
             operation,
@@ -148,7 +157,12 @@ pub fn provider() -> Result<Box<dyn NetworkProvider>, PlatformError> {
         Ok(Box::new(macos::MacosProvider::new()))
     }
 
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    #[cfg(target_os = "windows")]
+    {
+        Ok(Box::new(windows::WindowsProvider::new()))
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
     {
         Ok(Box::new(unsupported::UnsupportedProvider::new()))
     }

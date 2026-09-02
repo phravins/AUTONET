@@ -1,0 +1,16 @@
+# Line endings are a CI hazard here, not a style preference.
+#
+# GitHub's windows-latest runners check out with core.autocrlf=true, so every
+# file arrives CRLF. `cargo fmt --all --check` then compares rustfmt's LF output
+# against CRLF files and fails on line endings alone — a red job that says
+# nothing about the code. Shell scripts fare worse: scripts/macos-acceptance.sh
+# with CRLF line endings is not runnable at all.
+#
+# So: normalise on commit, and check out LF everywhere.
+* text=auto eol=lf
+
+# Binary-ish things that must never be touched, in case one is ever added.
+*.png binary
+*.jpg binary
+*.ico binary
+*.pdf binary

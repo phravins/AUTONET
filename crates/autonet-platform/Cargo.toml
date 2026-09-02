@@ -34,5 +34,36 @@ system-configuration = "0.8"
 core-foundation = "0.10"
 libc = "0.2"
 
+# Windows needs no async runtime either: the IP Helper calls are blocking.
+#
+# Declared before anything calls it, so the windows-latest CI job proves the
+# dependency resolves and builds on a real Windows toolchain before Task 2
+# depends on it — the same reason the macOS block above landed in that
+# milestone's first task.
+#
+# windows-sys rather than the `windows` crate: IP Helper is plain C — linked
+# lists of IP_ADAPTER_ADDRESSES_LH and SOCKADDR unions — so the idiomatic
+# crate's wrappers buy little, while its proc macros cost build time on a third
+# runner and would put a different idiom in windows/ than macos/ uses.
+#
+# 0.61 rather than the 0.59 that if-addrs pins: 0.59 pulls windows-targets and
+# its eight per-architecture import-library crates, where 0.61 uses
+# windows-link and raw-dylib. Nothing is duplicated, because if-addrs above is
+# macOS-only and so never enters a Windows build.
+#
+# Each feature is claimed by a named task. Ndis looks droppable and is not:
+# MIB_IPFORWARD_ROW2.InterfaceLuid is an Ndis::NET_LUID_LH, and windows-sys
+# cfg-gates every module separately, so IpHelper alone stops compiling the
+# moment Task 4 touches a route row. Win32_NetworkManagement_WiFi (WlanAPI) is
+# deliberately absent: it is the candidate second source for Task 3's
+# classification question, and enabling it now would prejudge that comparison.
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_NetworkManagement_IpHelper", # Tasks 2-4: GetAdaptersAddresses, GetIpForwardTable2, IF_TYPE_*
+    "Win32_NetworkManagement_Ndis",     # Task 4: NET_LUID_LH, reached through MIB_IPFORWARD_ROW2
+    "Win32_Networking_WinSock",         # Tasks 2 and 4: SOCKADDR_INET, ADDRESS_FAMILY
+] }
+
 [dev-dependencies]
 serde_json = { workspace = true }
