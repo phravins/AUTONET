@@ -43,11 +43,10 @@ mod hwaddr;
 // inside the `cfg`-gated backend and consequently could only be tested on a
 // runner none of us can debug on; keeping the pure part out here is the fix.
 //
-// Windows compiles it for one constant only: `UNCLASSIFIED`, the placeholder
-// every adapter carries until Windows Task 3 writes its own `IfType` table. The
-// alternative was a second spelling of the same string in the Windows backend,
-// which is how two platforms end up disagreeing about a value that appears in
-// `--json`.
+// Windows compiles it for one constant only: `UNCLASSIFIED`, which `wintype`
+// reuses for the same "no source could identify this device" case. The
+// alternative was a second spelling of the same string, which is how two
+// platforms end up disagreeing about a value that appears in `--json`.
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 mod linktype;
@@ -78,6 +77,15 @@ mod servicerank;
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 mod winparse;
+
+// Deciding what *sort* of device an interface is, on Windows — `linktype`'s
+// counterpart, out here for the same reason. A misclassification is the quietest
+// failure this crate has: nothing errors, an address just moves several hundred
+// points up or down the ranking. The decision table needs to be exercised where
+// a failure can be read, not only on the Windows runner.
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+mod wintype;
 
 #[cfg(target_os = "linux")]
 mod linux;

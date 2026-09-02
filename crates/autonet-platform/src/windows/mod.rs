@@ -4,10 +4,13 @@
 //! `iphlpapi.dll`, and the plan is for two calls to cover what Linux needed
 //! netlink for and macOS needed three sources for:
 //!
-//! | Source | Expected to provide |
+//! | Source | Provides |
 //! |---|---|
-//! | `GetAdaptersAddresses` | interfaces, addresses, `IfType`, `OperStatus`, index, MTU, MAC |
-//! | `GetIpForwardTable2` | routes, gateways, the default route, per-route metrics |
+//! | `GetAdaptersAddresses` | interfaces, addresses, `IfType`, `TunnelType`, `OperStatus`, index, MTU, MAC, LUID |
+//! | `GetIfTable2` | `AccessType`, `PhysicalMediumType`, `MediaType`, the `HardwareInterface` bit, `AdminStatus` |
+//! | `GetIpForwardTable2` | routes, gateways, the default route, per-route metrics — Task 4 |
+//!
+//! Two whole-machine calls, joined by LUID, rather than anything per adapter.
 //!
 //! # Why not names or descriptions
 //!
@@ -35,11 +38,15 @@
 //! as the address. [`adapters`] holds the full comparison. The practical
 //! consequence is that this backend adds no dependency.
 //!
-//! Classification is a separate question and stays open: whether `IfType` alone
-//! can tell Wi-Fi from Ethernet, or whether WlanAPI or WMI is needed the way
-//! SystemConfiguration was on macOS, is settled in Task 3 by checking `IfType`
-//! first — the same ordering discipline macOS used — not by reaching for the
-//! richer API up front.
+//! **Does `IfType` alone classify? Half of it does, and it is the other half
+//! that bites.** Task 3 settled this by checking `IfType` first rather than
+//! reaching for the richer API. Wi-Fi versus Ethernet — the question that forced
+//! macOS to lead with SystemConfiguration — Windows answers itself, with
+//! `IF_TYPE_IEEE80211`, so **WlanAPI is not needed and stays disabled**. What
+//! `IfType` cannot answer is Ethernet versus a virtual adapter *presenting* as
+//! Ethernet, which is what a TAP-mode VPN, a Hyper-V switch and a WSL switch all
+//! do. `GetIfTable2` settles that, for one call. [`crate::wintype`] holds the
+//! full comparison against `GetIfEntry2`, WlanAPI and WMI.
 //!
 //! **Are the metrics real?** macOS turned out to have no per-route metric at
 //! all, which is why [`crate::servicerank`] exists. `MIB_IPFORWARD_ROW2` has a
@@ -63,17 +70,47 @@
 //! decide on knowingly. The `Luid`, which *is* unique and persistent, is the
 //! join key Task 4 will use for routes.
 //!
+//! # Kinds this backend cannot identify, stated rather than approximated
+//!
+//! Two gaps have no source in the IP Helper API, and neither is worked around:
+//!
+//! - **Bridges.** There is no `IF_TYPE_BRIDGE`; windows-sys has no such constant
+//!   because `ipifcons.h` has none. A Windows network bridge presents as an
+//!   Ethernet device, so it is reported as Ethernet (+250) rather than Bridge
+//!   (+150). The 100-point difference only ever matters between a bridge and a
+//!   real port on the same machine, and calling a bridge Ethernet is closer to
+//!   the truth than calling a real port a bridge would be.
+//! - **Container devices.** On Linux `docker0` is `Container` and loses 800
+//!   points. Docker Desktop on Windows runs behind a Hyper-V vEthernet adapter
+//!   that is indistinguishable, by any numeric field, from the vEthernet adapter
+//!   carrying the host's real connectivity. So both land on
+//!   `Other("virtual-ethernet")` and score zero. Distinguishing them would
+//!   require matching the adapter name against `"vEthernet (WSL)"` or similar,
+//!   which is the guess this milestone forbids; `exclude_interfaces` is the
+//!   supported way to express a preference AutoNet cannot derive.
+//!
+//! `IF_TYPE_PROP_VIRTUAL` is likewise left unmapped. IANA calls it "proprietary
+//! virtual/internal" and this project has no observation of what Windows
+//! actually uses it for, so it falls through to `unclassified` (zero) rather
+//! than to `InterfaceKind::Virtual`, which would cost it 800 points on a guess.
+//!
 //! # Status
 //!
 //! **Unverified on hardware.** Written without access to a Windows machine.
-//! Interfaces and addresses are real from Task 2 onward; routes are still empty
-//! until Task 4. The `windows-latest` CI job can prove this crate compiles,
+//! Interfaces, addresses and kinds are real from Tasks 2 and 3; routes are still
+//! empty until Task 4. The `windows-latest` CI job proves this crate compiles,
 //! links against the real `iphlpapi.dll` and returns something coherent for a VM
 //! with one virtual NIC — no Wi-Fi radio, no VPN, no tunnel, no IPv6 temporary
 //! address. Every path that depends on those is type-checked and never executed
 //! until the Task 7 hardware run.
+//!
+//! The weakest claim in the backend is the bit position of `HardwareInterface`
+//! in `MIB_IF_ROW2`, which windows-sys exposes as an unnamed `u8`. It is
+//! reasoned from the MSVC bitfield ABI, guarded at runtime by a loopback
+//! consistency check, and **not observed** — see [`iftable`].
 
 mod adapters;
+mod iftable;
 
 use autonet_core::model::NetworkState;
 

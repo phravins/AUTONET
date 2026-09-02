@@ -27,7 +27,17 @@
 //! `Description` — `"Intel(R) Wi-Fi 6E AX211"` — and the adapter GUID. Both are
 //! vendor strings rather than kernel facts, and reading either as evidence about
 //! what a device *is* would be the Windows spelling of guessing that `en0` means
-//! Wi-Fi. Classification is Task 3's, from `IfType`.
+//! Wi-Fi. Classification is [`crate::wintype`]'s, from numeric fields only.
+//!
+//! # One correction to the note this module shipped with
+//!
+//! Task 2 recorded that filling `broadcast`, `point_to_point` and the
+//! `up`/`running` split "means a per-interface `GetIfEntry2` call, which is a
+//! real cost (one call per adapter)". That was wrong, and Task 3 found it while
+//! comparing classification sources: `GetIfTable2` returns **every** interface in
+//! a single call, so the same fields cost one syscall for the whole machine. All
+//! four gaps are closed here, and the join is by LUID — see
+//! [`super::iftable`].
 //!
 //! # Status
 //!
@@ -38,13 +48,14 @@
 //! runner has one virtual NIC, so the IPv6, temporary-address,
 //! duplicate-address and index-fallback paths compile and never execute.
 
+use std::collections::HashMap;
+
 use autonet_core::model::{Address, Interface, InterfaceFlags, InterfaceKind};
 use windows_sys::core::PWSTR;
 use windows_sys::Win32::Foundation::{ERROR_BUFFER_OVERFLOW, ERROR_NO_DATA, ERROR_SUCCESS};
 use windows_sys::Win32::NetworkManagement::IpHelper::{
     GetAdaptersAddresses, GAA_FLAG_SKIP_ANYCAST, GAA_FLAG_SKIP_DNS_SERVER, GAA_FLAG_SKIP_MULTICAST,
-    IF_TYPE_SOFTWARE_LOOPBACK, IP_ADAPTER_ADDRESSES_LH, IP_ADAPTER_NO_MULTICAST,
-    IP_ADAPTER_UNICAST_ADDRESS_LH,
+    IP_ADAPTER_ADDRESSES_LH, IP_ADAPTER_NO_MULTICAST, IP_ADAPTER_UNICAST_ADDRESS_LH,
 };
 use windows_sys::Win32::NetworkManagement::Ndis::{
     IfOperStatusDormant, IfOperStatusDown, IfOperStatusLowerLayerDown, IfOperStatusNotPresent,
@@ -54,9 +65,10 @@ use windows_sys::Win32::Networking::WinSock::{
     IpDadStateDuplicate, IpSuffixOriginRandom, AF_INET, AF_INET6, AF_UNSPEC,
 };
 
+use super::iftable::{self, Row};
 use crate::hwaddr::format_mac;
-use crate::linktype::UNCLASSIFIED;
 use crate::winparse::{self, af, oper};
+use crate::wintype::{self, Evidence};
 use crate::PlatformError;
 
 // The constants `winparse` restates so that it can be built and tested off
@@ -122,7 +134,15 @@ pub(crate) fn interfaces() -> Result<Vec<Interface>, PlatformError> {
         return Ok(Vec::new());
     };
 
-    Ok(walk(buffer.as_ptr().cast::<IP_ADAPTER_ADDRESSES_LH>()))
+    // Queried second, and only once the adapter list is in hand: if there are no
+    // adapters at all there is nothing to classify, and asking would be a
+    // syscall spent to build a map nothing reads.
+    let rows = iftable::by_luid()?;
+
+    Ok(walk(
+        buffer.as_ptr().cast::<IP_ADAPTER_ADDRESSES_LH>(),
+        &rows,
+    ))
 }
 
 /// Call `GetAdaptersAddresses`, growing the buffer until it fits.
@@ -189,7 +209,7 @@ fn adapter_buffer() -> Result<Option<Vec<u64>>, PlatformError> {
 /// by name would silently *drop* one of two adapters sharing a friendly name.
 /// Sorting keeps both. The sort is stable, so adapters that do collide stay in
 /// the order Windows listed them.
-fn walk(head: *const IP_ADAPTER_ADDRESSES_LH) -> Vec<Interface> {
+fn walk(head: *const IP_ADAPTER_ADDRESSES_LH, rows: &HashMap<u64, Row>) -> Vec<Interface> {
     let mut interfaces = Vec::new();
     let mut current = head;
 
@@ -200,7 +220,7 @@ fn walk(head: *const IP_ADAPTER_ADDRESSES_LH) -> Vec<Interface> {
         // outlives this walk.
         let adapter = unsafe { &*current };
 
-        if let Some(interface) = interface_from(adapter) {
+        if let Some(interface) = interface_from(adapter, rows) {
             interfaces.push(interface);
         }
 
@@ -218,18 +238,31 @@ fn walk(head: *const IP_ADAPTER_ADDRESSES_LH) -> Vec<Interface> {
 /// no user could act on it. It should not happen — `GAA_FLAG_SKIP_FRIENDLY_NAME`
 /// is not set, so Windows always fills `FriendlyName` in — which is precisely
 /// why the case is handled explicitly rather than assumed away.
-fn interface_from(adapter: &IP_ADAPTER_ADDRESSES_LH) -> Option<Interface> {
+fn interface_from(
+    adapter: &IP_ADAPTER_ADDRESSES_LH,
+    rows: &HashMap<u64, Row>,
+) -> Option<Interface> {
     let name = friendly_name(adapter.FriendlyName);
     if name.is_empty() {
         return None;
     }
 
-    // Loopback is identified by the type Windows reports, never by name. The
-    // built-in adapter is called "Loopback Pseudo-Interface 1" in English and
-    // something else on a localised install, and a user can add further
-    // KM-TEST loopback adapters under arbitrary names — two independent ways a
-    // name check would be wrong.
-    let is_loopback = adapter.IfType == IF_TYPE_SOFTWARE_LOOPBACK;
+    // SAFETY: `NET_LUID_LH` unions a `u64` with a bitfield of the same width, so
+    // every bit pattern is a valid `u64`. This is the join key: see
+    // `super::iftable` for why it is the LUID and not the interface index.
+    let luid = unsafe { adapter.Luid.Value };
+    let row = rows.get(&luid);
+
+    // Never from `FriendlyName` or `Description`. The built-in loopback is
+    // called "Loopback Pseudo-Interface 1" in English and something else on a
+    // localised install, and a user can add further KM-TEST loopback adapters
+    // under arbitrary names — two independent ways a name check would be wrong.
+    let kind = wintype::classify(Evidence {
+        if_type: adapter.IfType,
+        tunnel_type: adapter.TunnelType,
+        ndis: row.map(|row| row.ndis),
+    });
+    let is_loopback = kind == InterfaceKind::Loopback;
 
     // SAFETY: `Anonymous1` unions a `u64` with a `{ Length, IfIndex }` pair of
     // the same total width. Every bit pattern is a valid `u32`, so reading
@@ -249,35 +282,31 @@ fn interface_from(adapter: &IP_ADAPTER_ADDRESSES_LH) -> Option<Interface> {
         } else {
             ipv4_index
         },
-        // Task 3's job, not this one's. Loopback is the single exception, and
-        // only because the model needs it as a *flag*: `flags.loopback` and
-        // `InterfaceKind::Loopback` describe the same fact, and setting one
-        // without the other would be internally inconsistent.
-        kind: if is_loopback {
-            InterfaceKind::Loopback
-        } else {
-            InterfaceKind::Other(UNCLASSIFIED.to_owned())
-        },
+        kind,
         state: winparse::interface_state(adapter.OperStatus),
         flags: InterfaceFlags {
-            // `up` and `running` carry the same fact here, and that is honest
-            // rather than lazy. Linux distinguishes administrative `IFF_UP` from
-            // carrier `IFF_RUNNING`; `GetAdaptersAddresses` reports only
-            // operational status. Administrative status lives in
-            // `MIB_IF_ROW2.AdminStatus`, behind a separate `GetIfEntry2` call
-            // per adapter. Inventing a difference between the two fields would
-            // be worse than reporting the one fact twice.
-            up: adapter.OperStatus == oper::UP,
+            // Task 2 wrote the same value into both because
+            // `GetAdaptersAddresses` reports only operational status. With the
+            // if-table joined, `up` is administrative (`AdminStatus`, the true
+            // `IFF_UP` analogue) and `running` is operational (`IFF_RUNNING`),
+            // as on Linux. An adapter a user has disabled now reads `up: false`
+            // rather than borrowing the carrier's answer. Where the join missed,
+            // both fall back to operational status: the Task 2 behaviour, which
+            // is a weaker answer rather than an invented one.
+            up: row.map_or(adapter.OperStatus == oper::UP, |row| row.admin_up),
             running: adapter.OperStatus == oper::UP,
+            // Read back off the classified kind rather than recomputed from
+            // `IfType`. They describe one fact, and deriving them separately is
+            // how they drift: `wintype` will also call an adapter loopback on
+            // the strength of `NdisMediumLoopback` alone.
             loopback: is_loopback,
-            // Neither has any source in this API. `MIB_IF_ROW2.AccessType`
-            // supplies both, at the cost of one more call per adapter — and
-            // nothing in autonet-core reads these two fields, so the cost buys
-            // only a more complete `interfaces --json`. Deriving them from
-            // `IfType` instead would be exactly the inference this backend
-            // refuses to make.
-            broadcast: false,
-            point_to_point: false,
+            // Both come from `AccessType`, which Task 2 had no source for and
+            // wrongly expected to cost one call per adapter. Neither is inferred
+            // from `IfType`, and an access type that is neither broadcast nor
+            // point-to-point — point-to-multipoint, say — leaves both false
+            // rather than being rounded to the nearer one.
+            broadcast: row.is_some_and(|row| wintype::is_broadcast(row.access_type)),
+            point_to_point: row.is_some_and(|row| wintype::is_point_to_point(row.access_type)),
             multicast: flags & IP_ADAPTER_NO_MULTICAST == 0,
         },
         mac: hardware_address(adapter),
