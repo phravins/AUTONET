@@ -1,7 +1,6 @@
 # Selection fixtures
 
-Every file here is a serialised `autonet_core::model::NetworkState` — byte-for-byte
-what `autonet status --json` emits. They drive
+Every file here is a serialised `autonet_core::model::NetworkState`. They drive
 [`crates/autonet-core/tests/fixtures.rs`](../../crates/autonet-core/tests/fixtures.rs),
 which constructs no provider and touches no kernel: the harness reads JSON and runs
 the selector, so it produces identical results on every platform. That is why CI
@@ -62,12 +61,32 @@ this shape.
 ### 3. Real captures — none yet
 
 There is no capture from real hardware in this directory, and no file here should
-ever be labelled as one unless it was produced by
-`autonet status --json` on the machine it describes.
+ever be labelled as one unless it came off the machine it describes.
 
 **Naming rule:** `macos-*` is synthetic. A genuine capture lands as
 **`macos-real-<scenario>.json`**, written by the Milestone 2a hardware-acceptance
-run. Until one exists, the VPN-over-macOS case is verified only in theory.
+run ([`docs/milestone-2a-acceptance.md`](../../docs/milestone-2a-acceptance.md)).
+Until one exists, the VPN-over-macOS case is verified only in theory.
+
+## Capturing one
+
+```sh
+cargo run -p autonet-platform --example capture > tests/fixtures/macos-real-wifi.json
+```
+
+**Not `autonet status --json`** — an earlier version of this file said that, and
+it was wrong. No CLI subcommand emits a whole `NetworkState`: `status --json`
+reports the *decision* (`selected`, `urls`, `candidates`), and `interfaces --json`
+and `routes --json` each carry one half of the state. Merging those two would
+also mean two separate snapshots, so a link changing in between would produce a
+fixture describing a machine that never existed.
+[`examples/capture.rs`](../../crates/autonet-platform/examples/capture.rs) takes
+one snapshot, strips MAC addresses, and clears `captured_at` so re-capturing an
+unchanged network is not a diff.
+
+It does **not** strip IP addresses — those are the fixture's whole content — so a
+capture publishes the interface names, addresses and prefixes of the machine it
+came from. Read one before committing it.
 
 ## Adding a fixture
 

@@ -2,6 +2,12 @@
 /target
 **/*.rs.bk
 
+# Hardware acceptance runs (scripts/macos-acceptance.sh). Evidence, not source:
+# raw command output from one machine on one network, including MAC addresses,
+# since the script asks for `-v`. The one artefact meant to be kept is the
+# capture it copies into tests/fixtures/macos-real-*.json.
+/acceptance
+
 # Nix
 result
 result-*
