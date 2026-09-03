@@ -31,6 +31,11 @@ mod servicerank;
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 mod winparse;
 
+// Windows route shaping.
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+mod winroute;
+
 // Windows interface classification.
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]

@@ -2,6 +2,7 @@
 
 mod adapters;
 mod iftable;
+mod route;
 
 use autonet_core::model::NetworkState;
 
@@ -18,8 +19,11 @@ impl WindowsProvider {
 
 impl NetworkProvider for WindowsProvider {
     fn snapshot(&self) -> Result<NetworkState, PlatformError> {
-        // Route discovery is not implemented yet.
-        Ok(NetworkState::new(adapters::interfaces()?, Vec::new()).captured_now())
+        // The adapter walk first: it assigns the indices routes are joined to.
+        let adapters = adapters::interfaces()?;
+        let routes = route::dump_routes(&adapters.links)?;
+
+        Ok(NetworkState::new(adapters.interfaces, routes).captured_now())
     }
 
     fn platform_name(&self) -> &'static str {

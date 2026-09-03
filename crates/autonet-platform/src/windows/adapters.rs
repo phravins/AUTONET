@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use autonet_core::model::{Address, Interface, InterfaceFlags, InterfaceKind};
+use autonet_core::model::{Address, Family, Interface, InterfaceFlags, InterfaceKind};
 use windows_sys::core::PWSTR;
 use windows_sys::Win32::Foundation::{ERROR_BUFFER_OVERFLOW, ERROR_NO_DATA, ERROR_SUCCESS};
 use windows_sys::Win32::NetworkManagement::IpHelper::{
@@ -48,10 +48,51 @@ const MAX_ATTEMPTS: usize = 3;
 /// Maximum UTF-16 units scanned in a friendly name.
 const MAX_NAME_UNITS: usize = 512;
 
+/// What the route walk needs to know about an adapter.
+///
+/// The interface metric is Windows' native adapter-priority mechanism — what
+/// "Automatic metric" in Network Connections sets — and the closest equivalent
+/// to macOS's network service order. It arrives in the same struct as the
+/// address data, so [`crate::winroute::effective_metric`] costs no extra call;
+/// `GetIpInterfaceTable` would report the same number for a third syscall and a
+/// third failure path.
+pub(crate) struct AdapterLink {
+    /// The index this adapter's [`Interface`] was given.
+    pub index: u32,
+    /// The IPv4 interface metric.
+    pub ipv4_metric: u32,
+    /// The IPv6 interface metric.
+    pub ipv6_metric: u32,
+}
+
+impl AdapterLink {
+    /// The interface metric for one family.
+    pub fn metric(&self, family: Family) -> u32 {
+        match family {
+            Family::V4 => self.ipv4_metric,
+            Family::V6 => self.ipv6_metric,
+        }
+    }
+}
+
+/// The adapter walk's results.
+///
+/// `links` is keyed by LUID because that is the only identifier both this walk
+/// and `GetIpForwardTable2` report unambiguously; see [`super::route`].
+pub(crate) struct Adapters {
+    /// Every adapter, as the model sees it.
+    pub interfaces: Vec<Interface>,
+    /// Route-join data, keyed by LUID.
+    pub links: HashMap<u64, AdapterLink>,
+}
+
 /// Return adapters and their addresses.
-pub(crate) fn interfaces() -> Result<Vec<Interface>, PlatformError> {
+pub(crate) fn interfaces() -> Result<Adapters, PlatformError> {
     let Some(buffer) = adapter_buffer()? else {
-        return Ok(Vec::new());
+        return Ok(Adapters {
+            interfaces: Vec::new(),
+            links: HashMap::new(),
+        });
     };
 
     let rows = iftable::by_luid()?;
@@ -105,30 +146,32 @@ fn adapter_buffer() -> Result<Option<Vec<u64>>, PlatformError> {
 }
 
 /// Walk and stably sort the adapter list by name.
-fn walk(head: *const IP_ADAPTER_ADDRESSES_LH, rows: &HashMap<u64, Row>) -> Vec<Interface> {
+fn walk(head: *const IP_ADAPTER_ADDRESSES_LH, rows: &HashMap<u64, Row>) -> Adapters {
     let mut interfaces = Vec::new();
+    let mut links = HashMap::new();
     let mut current = head;
 
     while !current.is_null() {
         // SAFETY: `current` points into the API-owned result buffer.
         let adapter = unsafe { &*current };
 
-        if let Some(interface) = interface_from(adapter, rows) {
+        if let Some((luid, interface, link)) = interface_from(adapter, rows) {
             interfaces.push(interface);
+            links.insert(luid, link);
         }
 
         current = adapter.Next;
     }
 
     interfaces.sort_by(|a, b| a.name.cmp(&b.name));
-    interfaces
+    Adapters { interfaces, links }
 }
 
-/// Convert one adapter into the shared model.
+/// Convert one adapter into the shared model, with its route-join data.
 fn interface_from(
     adapter: &IP_ADAPTER_ADDRESSES_LH,
     rows: &HashMap<u64, Row>,
-) -> Option<Interface> {
+) -> Option<(u64, Interface, AdapterLink)> {
     let name = friendly_name(adapter.FriendlyName);
     if name.is_empty() {
         return None;
@@ -150,14 +193,19 @@ fn interface_from(
     // SAFETY: The union exposes the adapter flags.
     let flags = unsafe { adapter.Anonymous2.Flags };
 
-    Some(Interface {
+    // Prefer the IPv4 index when present. `IfIndex` and `Ipv6IfIndex` are
+    // separate namespaces, so this single field cannot represent both; the
+    // route walk joins on the LUID and reads the index back from here rather
+    // than trusting `MIB_IPFORWARD_ROW2.InterfaceIndex` to agree.
+    let index = if ipv4_index == 0 {
+        adapter.Ipv6IfIndex
+    } else {
+        ipv4_index
+    };
+
+    let interface = Interface {
         name,
-        // Prefer the IPv4 index when present.
-        index: if ipv4_index == 0 {
-            adapter.Ipv6IfIndex
-        } else {
-            ipv4_index
-        },
+        index,
         kind,
         state: winparse::interface_state(adapter.OperStatus),
         flags: InterfaceFlags {
@@ -172,7 +220,15 @@ fn interface_from(
         mac: hardware_address(adapter),
         mtu: mtu_of(adapter),
         addresses: addresses_of(adapter),
-    })
+    };
+
+    let link = AdapterLink {
+        index,
+        ipv4_metric: adapter.Ipv4Metric,
+        ipv6_metric: adapter.Ipv6Metric,
+    };
+
+    Some((luid, interface, link))
 }
 
 /// Convert a Windows friendly name to UTF-8.
