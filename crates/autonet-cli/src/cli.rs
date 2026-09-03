@@ -65,9 +65,8 @@ pub enum Command {
 
 /// Flags accepted before or after any subcommand.
 ///
-/// The booleans are independent command-line switches. Collapsing them into
-/// enums would change what the user types, which is the opposite of what this
-/// struct is for.
+/// The booleans are independent switches; collapsing them into enums would
+/// change what the user types.
 #[derive(Debug, Args)]
 #[allow(clippy::struct_excessive_bools)]
 pub struct GlobalArgs {
@@ -123,9 +122,7 @@ impl GlobalArgs {
     /// Build the effective configuration.
     ///
     /// Precedence, lowest to highest: built-in defaults, the config file, the
-    /// `AUTONET_*` environment variables, then these flags. Flags win because
-    /// they are the most specific statement of intent — a developer typing
-    /// `--interface eth0` means it regardless of what the file says.
+    /// `AUTONET_*` environment variables, then these flags.
     ///
     /// # Errors
     ///
@@ -146,10 +143,9 @@ impl GlobalArgs {
                 .exclude_interfaces
                 .extend(self.exclude.iter().cloned());
         }
-        // These are opt-in switches, so a bare flag turns the feature on and an
-        // absent flag leaves the lower layers alone. There is deliberately no
-        // `--no-allow-vpn`: nothing below can turn them on by surprise except
-        // the user's own config file, where they can equally turn them off.
+        // Opt-in switches: a bare flag turns the feature on, an absent flag
+        // leaves the lower layers alone. There is deliberately no
+        // `--no-allow-vpn`; only the user's own config file can turn these on.
         if self.allow_vpn {
             config.selection.allow_vpn = true;
         }

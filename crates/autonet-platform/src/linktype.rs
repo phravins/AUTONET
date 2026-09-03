@@ -1,47 +1,26 @@
 //! What *sort* of device an interface is, on macOS.
 //!
-//! # Why this module is not inside `macos/`
+//! A pure decision over already-gathered evidence, kept out of the `cfg`-gated
+//! backend so the table below and its tests run on the Linux job too.
 //!
-//! Everything here is a pure decision over already-gathered evidence: no FFI,
-//! no framework calls, no kernel. Keeping it out of the `#[cfg(target_os =
-//! "macos")]` backend means the table below is compiled and its tests run on
-//! the Linux CI job too, which is the only way this logic gets exercised
-//! anywhere other than a machine none of the maintainers can debug on. The
-//! macOS backend keeps only the parts that genuinely need Darwin: reading
-//! `ifi_type` out of a `getifaddrs` record, and asking SystemConfiguration.
+//! SystemConfiguration leads and `ifi_type` follows, despite `ifi_type` arriving
+//! free with the `AF_LINK` walk, for one decisive reason: **`ifi_type` cannot
+//! tell Wi-Fi from Ethernet.** A Mac's Wi-Fi card reports `IFT_ETHER`;
+//! `IFT_IEEE80211` never surfaces through the BSD layer. Apple's guidance is to
+//! use `SCNetworkInterfaceCopyAll`. `ifi_type` still earns its place: it is
+//! free, and it describes devices SystemConfiguration does not enumerate at all,
+//! which is where the interesting tunnels live.
 //!
-//! # Why SystemConfiguration leads and `ifi_type` follows
-//!
-//! The obvious design is the other way round — `ifi_type` arrives free with the
-//! `AF_LINK` walk the backend already does, so using it first and falling back
-//! to a framework call looks like the cheap option. It is the wrong order, for
-//! one decisive reason: **`ifi_type` cannot tell Wi-Fi from Ethernet.** A Mac's
-//! Wi-Fi card reports `IFT_ETHER`, because the driver presents an Ethernet data
-//! link; `IFT_IEEE80211` does not surface through the BSD layer at all. Apple's
-//! own guidance on this question is to use `SCNetworkInterfaceCopyAll`.
-//!
-//! Wired-versus-wireless is the most consequential distinction AutoNet draws —
-//! it is worth 50 points of score on its own — so resolving it only in a
-//! fallback would be backwards.
-//!
-//! `ifi_type` still earns its place. It is free, and it describes devices
-//! SystemConfiguration does not enumerate at all, which is exactly where the
-//! interesting tunnels live.
-//!
-//! # Status
-//!
-//! **The premises here are documented, not observed.** See the module tests for
-//! what is pinned, and the crate review notes for what only hardware settles.
+//! **The premises here are documented, not observed.**
 
 use autonet_core::model::InterfaceKind;
 
 /// Link types from Apple's `<net/if_types.h>`.
 ///
-/// Hardcoded because `libc` defines no `IFT_*` constants — for Apple or for any
-/// BSD. Most of these are IANA `ifType` registry assignments rather than Apple
-/// inventions, which is why they can be trusted as stable numbers: `IFT_ETHER`
-/// 6, `IFT_PPP` 23, `IFT_LOOP` 24, `IFT_L2VLAN` 135, `IFT_IEEE8023ADLAG` 136
-/// and `IFT_BRIDGE` 209 all match the registry. `IFT_CELLULAR` is Apple's own.
+/// Hardcoded because `libc` defines no `IFT_*` constants for any BSD. Most are
+/// IANA `ifType` registry assignments rather than Apple inventions, so the
+/// numbers are stable: `IFT_ETHER` 6, `IFT_PPP` 23, `IFT_LOOP` 24, `IFT_L2VLAN`
+/// 135, `IFT_IEEE8023ADLAG` 136, `IFT_BRIDGE` 209. `IFT_CELLULAR` is Apple's.
 mod ift {
     /// Assigned when nothing more specific fits. `utun` devices report this.
     pub const OTHER: u8 = 0x01;
@@ -74,10 +53,9 @@ pub(crate) const IFI_TYPE_UNSPECIFIED: u8 = ift::OTHER;
 
 /// The interface types SystemConfiguration reports.
 ///
-/// A plain mirror of `system_configuration::SCNetworkInterfaceType`, which is
-/// macOS-only and is neither `Copy` nor comparable. Restating it here is what
-/// lets the decision table live outside the `cfg`-gated backend; the
-/// translation between the two is a single match in `macos/scnetwork.rs`.
+/// A mirror of `system_configuration::SCNetworkInterfaceType`, which is
+/// macOS-only and neither `Copy` nor comparable. Restating it lets the decision
+/// table live outside the `cfg` gate; `macos/scnetwork.rs` translates.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ScType {
     /// Wired Ethernet.
@@ -119,11 +97,9 @@ pub(crate) enum ScType {
 
 /// Everything known about an interface that bears on what kind it is.
 ///
-/// Deliberately only facts the kernel or a framework stated. There is no `name`
-/// field, and that is the point: `en0` is Wi-Fi on a laptop and Ethernet on a
-/// Mac Pro, Thunderbolt docks renumber interfaces, and a name-based guess fails
-/// differently on different machines — the worst possible behaviour for a
-/// selector whose whole value is being deterministic.
+/// Only facts the kernel or a framework stated. There is no `name` field, and
+/// that is the point: `en0` is Wi-Fi on a laptop and Ethernet on a Mac Pro, so a
+/// name-based guess fails differently on different machines.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Evidence {
     /// The `IFF_LOOPBACK` flag.
@@ -158,12 +134,11 @@ pub(crate) fn classify(evidence: Evidence) -> InterfaceKind {
         return kind;
     }
 
-    // Nothing named this device, but it is a point-to-point link. On macOS that
-    // is overwhelmingly a `utun`: WireGuard, Tailscale and every
-    // NEPacketTunnelProvider VPN create one, and none of them appear in
-    // SystemConfiguration's enumeration of configurable hardware. Treating it
-    // as a tunnel is what stops a VPN address quietly outranking the real LAN
-    // address, and it rests on a kernel flag rather than on the name `utun`.
+    // Nothing named this device, but it is point-to-point — on macOS that is
+    // overwhelmingly a `utun`, which WireGuard, Tailscale and every
+    // NEPacketTunnelProvider VPN create and none of which SystemConfiguration
+    // enumerates. This is what stops a VPN address outranking the real LAN
+    // address, and it rests on a kernel flag rather than the name `utun`.
     if evidence.point_to_point {
         return InterfaceKind::Vpn;
     }
@@ -183,12 +158,9 @@ pub(crate) const UNCLASSIFIED: &str = "unclassified";
 /// Returns `None` for [`ScType::Ipv4`], which describes a configuration method
 /// rather than a device, so the caller falls through to the next source.
 fn from_sc(sc: ScType) -> Option<InterfaceKind> {
-    // Aggregates and tagged links resolve to Ethernet rather than to a variant
-    // of their own, matching the Linux backend, where classify_interface maps
-    // "bond" | "vlan" | "macvlan" | "team" to Ethernet on the grounds that an
-    // aggregated or tagged link is still the real network path. Keeping the two
-    // platforms in step matters more here than extra precision: a bonded uplink
-    // should not score differently depending on which OS observed it.
+    // Aggregates and tagged links resolve to Ethernet, matching the Linux
+    // backend's bond/vlan/macvlan/team mapping: a bonded uplink should not
+    // score differently depending on which OS observed it.
     Some(match sc {
         ScType::Ethernet | ScType::Bond | ScType::Vlan | ScType::FireWire => {
             InterfaceKind::Ethernet
@@ -219,12 +191,10 @@ fn from_ifi_type(ifi_type: u8) -> Option<InterfaceKind> {
     Some(match ifi_type {
         ift::LOOP => InterfaceKind::Loopback,
         ift::BRIDGE => InterfaceKind::Bridge,
-        // L2VLAN and IEEE8023ADLAG for the same aggregate/tagged-link reasoning
-        // as `from_sc`. IFT_ETHER is the weaker of the three: it is reached only
-        // when SystemConfiguration did not enumerate the device, and since Wi-Fi
-        // always resolves through SC before arriving here, Ethernet is the best
-        // available reading rather than a certain one — see the known soft spot
-        // in the review notes.
+        // L2VLAN and IEEE8023ADLAG for the same reasoning as `from_sc`.
+        // IFT_ETHER is the weakest of the three: it is reached only when SC did
+        // not enumerate the device, so Ethernet is the best available reading
+        // rather than a certain one.
         ift::L2VLAN | ift::IEEE8023ADLAG | ift::ETHER => InterfaceKind::Ethernet,
         ift::PPP | ift::GIF | ift::STF => InterfaceKind::Vpn,
         ift::CELLULAR => InterfaceKind::Other("cellular".to_owned()),

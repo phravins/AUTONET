@@ -1,13 +1,4 @@
-//! The vocabulary of network-state changes.
-//!
-//! Milestone 1 does not watch anything — there is no runtime here, no thread,
-//! no netlink subscription. What this module provides is the *shape* of a
-//! change, plus [`diff`], which derives one by comparing two snapshots.
-//!
-//! Defining this now is deliberate. `autonet watch` and the daemon both need to
-//! answer "what changed, and does the selected address need recomputing?", and
-//! settling that vocabulary while the model is still small keeps a later
-//! milestone from reaching back in and reshaping the core.
+//! Network-state change events and snapshot diffing.
 
 use serde::Serialize;
 
@@ -50,9 +41,7 @@ pub enum NetworkEvent {
         /// The address that went away.
         address: Address,
     },
-    /// The default route for a family moved to a different interface, or
-    /// appeared, or vanished. The single most important trigger for
-    /// recomputing the selected address.
+    /// A default route moved, appeared, or vanished.
     DefaultRouteChanged {
         /// Which family's default route moved.
         family: Family,
@@ -77,11 +66,7 @@ impl NetworkDiff {
         self.events.is_empty()
     }
 
-    /// Whether the change is significant enough to warrant re-running the
-    /// selection engine.
-    ///
-    /// Address and default-route changes always are. A bare interface
-    /// appearing with no addresses is not.
+    /// Whether the selection result may have changed.
     #[must_use]
     pub fn affects_selection(&self) -> bool {
         self.events.iter().any(|e| {
@@ -97,12 +82,7 @@ impl NetworkDiff {
     }
 }
 
-/// Compare two snapshots and describe what changed.
-///
-/// Interfaces are matched by name rather than index, because a device that is
-/// removed and re-added — a USB Ethernet adapter, a VPN reconnecting — comes
-/// back with a fresh index but the same name, and reporting that as
-/// remove-plus-add would be technically true and practically useless.
+/// Compare snapshots, matching interfaces by name.
 #[must_use]
 pub fn diff(previous: &NetworkState, current: &NetworkState) -> NetworkDiff {
     let mut events = Vec::new();

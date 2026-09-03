@@ -1,9 +1,4 @@
-//! The four milestone-1 commands.
-//!
-//! Each one does the same three things: take a snapshot, ask `autonet-core` a
-//! question about it, and render the answer. No command reimplements any part
-//! of discovery or selection — that is the whole architectural point, and it is
-//! what will let the daemon and the SDKs answer identically.
+//! CLI command implementations.
 
 use std::fmt::Write as _;
 
@@ -31,10 +26,6 @@ impl Context {
     }
 }
 
-// ---------------------------------------------------------------------------
-// status
-// ---------------------------------------------------------------------------
-
 /// Show the selected address, and on failure explain why there wasn't one.
 pub fn status(ctx: &Context, args: &GlobalArgs) -> Result<(), CliError> {
     let state = ctx.snapshot()?;
@@ -47,9 +38,7 @@ pub fn status(ctx: &Context, args: &GlobalArgs) -> Result<(), CliError> {
         print!("{}", status_text(ctx, args, &state, &selection));
     }
 
-    // The report is printed either way — a developer running `autonet status`
-    // to find out *why* nothing works still needs to see the candidate list —
-    // but the exit code still says failure so scripts are not misled.
+    // Preserve the report while returning a failing exit code.
     if selection.selected.is_none() {
         return Err(CliError::NoAddress(
             selection.failure_reason(&ctx.config.selection),

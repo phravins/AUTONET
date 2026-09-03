@@ -1,15 +1,8 @@
-//! `autonet` — print the address other devices on your network can reach.
-//!
-//! The binary is deliberately thin. It parses flags, layers configuration,
-//! asks `autonet-platform` for a snapshot, asks `autonet-core` a question about
-//! it, and renders the answer. Every decision worth arguing about lives in the
-//! core, where it is covered by fixture tests that no amount of Wi-Fi switching
-//! can perturb.
+//! The `autonet` command-line entry point.
 
 #![deny(missing_docs)]
 #![warn(clippy::pedantic)]
 #![allow(clippy::must_use_candidate)]
-// "AutoNet" is a product name, not code.
 #![allow(clippy::doc_markdown)]
 
 mod cli;
@@ -24,13 +17,11 @@ use crate::cli::{Cli, Command};
 use crate::render::Theme;
 use crate::run::Context;
 
-/// Exit codes, which are part of the CLI's contract with shell scripts.
+/// CLI exit codes.
 mod exit {
-    /// Nothing usable could be selected. Distinct from a real failure: the
-    /// machine may simply be offline, which is an answer, not a malfunction.
+    /// No address was selectable.
     pub const NO_ADDRESS: u8 = 1;
-    /// AutoNet could not do its job — the OS could not be queried, or the
-    /// configuration is invalid.
+    /// A command failed.
     pub const FAILED: u8 = 2;
 }
 
@@ -70,8 +61,7 @@ fn main() -> ExitCode {
     match run(&cli) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
-            // Diagnostics go to stderr so that `autonet ip` keeps stdout clean
-            // for the one value it exists to produce.
+            // Keep command output machine-readable.
             eprintln!("autonet: {}", error.message());
             ExitCode::from(error.exit_code())
         }
@@ -85,8 +75,7 @@ fn run(cli: &Cli) -> Result<(), CliError> {
     let ctx = Context {
         provider,
         config,
-        // JSON is consumed by programs, never read off a terminal, so colour is
-        // switched off for it unconditionally rather than left to the tty check.
+        // JSON never includes terminal styling.
         theme: if cli.global.json {
             Theme::plain()
         } else {

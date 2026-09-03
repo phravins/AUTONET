@@ -5,36 +5,21 @@
 //! presents an Ethernet data link. See [`crate::linktype`] for why that makes
 //! this source primary rather than a fallback.
 //!
-//! # One call, not one per interface
-//!
-//! `SCNetworkInterfaceCopyAll` enumerates every interface in a single call, so
-//! the cost is paid once per snapshot and every lookup afterwards is a hash
-//! probe. There is no per-interface framework call anywhere in this backend.
-//!
-//! # The join, and why it is safe to be lopsided
-//!
-//! The result is keyed by BSD name (`en0`, `bridge0`), which is what joins it
-//! back to the `AF_LINK` walk in [`super::ifaddrs`]. The two enumerations are
-//! *not* symmetric and are not assumed to be:
-//!
-//! - **In SystemConfiguration but not `getifaddrs`** — configurable hardware
-//!   that is currently absent, such as a Thunderbolt adapter that is unplugged.
-//!   Harmless: nothing ever looks the entry up.
-//! - **In `getifaddrs` but not SystemConfiguration** — the interesting
-//!   direction. `utun` devices created by WireGuard, Tailscale and every
-//!   `NEPacketTunnelProvider` VPN are expected to land here, because
-//!   SystemConfiguration enumerates configurable *hardware* rather than every
-//!   kernel device. Those fall through to the link layer and then to
-//!   `IFF_POINTOPOINT`, which is why the classifier has a step 4 at all.
-//!
-//! So the map is treated as *evidence that may be missing*, never as a census.
-//!
-//! # Status
+//! `SCNetworkInterfaceCopyAll` enumerates everything in one call, keyed by BSD
+//! name, which is what joins it back to the `AF_LINK` walk in
+//! [`super::ifaddrs`]. The two enumerations are not symmetric and are not
+//! assumed to be: hardware that is configurable but absent appears only here
+//! (harmless, nothing looks it up), while `utun` devices from WireGuard,
+//! Tailscale and every `NEPacketTunnelProvider` VPN are expected to appear only
+//! in `getifaddrs`, since SystemConfiguration enumerates configurable
+//! *hardware*. Those fall through to `IFF_POINTOPOINT`, which is why the
+//! classifier has a step 4. The map is evidence that may be missing, not a
+//! census.
 //!
 //! **Unverified.** That SystemConfiguration omits `utun` is inferred from what
-//! it is documented to enumerate, not confirmed against a Mac with a VPN up. If
-//! it turns out to list them, the classifier answers from this map instead and
-//! is still correct — the uncertainty is one-directional.
+//! it documents itself as enumerating. If it does list them the classifier
+//! answers from this map and is still correct — the uncertainty is
+//! one-directional.
 
 use std::collections::hash_map::{Entry, HashMap};
 
@@ -50,16 +35,12 @@ use crate::linktype::ScType;
 
 /// Ask SystemConfiguration about every interface it knows, keyed by BSD name.
 ///
-/// Interfaces without a BSD name are skipped: SystemConfiguration models some
-/// entries that have no kernel device behind them (a VPN service that is
-/// configured but not connected, for instance), and those cannot be joined to
-/// anything the `AF_LINK` walk produced.
+/// Interfaces without a BSD name are skipped — SystemConfiguration models
+/// entries with no kernel device behind them, which cannot be joined to the
+/// `AF_LINK` walk.
 ///
-/// Infallible by design. `SCNetworkInterfaceCopyAll` reads the system's own
-/// configuration and needs no privileges, but if it ever returns nothing, an
-/// empty map is the right answer: classification degrades to the link layer
-/// rather than the whole snapshot failing. AutoNet reporting slightly coarser
-/// interface kinds beats AutoNet reporting no address at all.
+/// Infallible by design: an empty map degrades classification to the link layer
+/// rather than failing the whole snapshot.
 pub(crate) fn interface_types() -> HashMap<String, ScType> {
     network_configuration::get_interfaces()
         .iter()
@@ -72,15 +53,13 @@ pub(crate) fn interface_types() -> HashMap<String, ScType> {
 
 /// Translate the crate's macOS-only enum into AutoNet's own.
 ///
-/// The one genuinely macOS-gated part of classification, and deliberately
-/// nothing but a match: `SCNetworkInterfaceType` is neither `Copy` nor
-/// comparable and exists only on Darwin, so mirroring it once here is what lets
-/// every actual decision live in [`crate::linktype`] and be tested on Linux.
+/// Deliberately nothing but a match: `SCNetworkInterfaceType` exists only on
+/// Darwin, so mirroring it once here lets every actual decision live in
+/// [`crate::linktype`] and be tested on Linux.
 ///
-/// `None` when SystemConfiguration reports a type this build does not
-/// recognise — a newer macOS naming something the vendored bindings predate.
-/// Treated exactly like an interface SystemConfiguration never listed, so an
-/// unfamiliar type falls through to the link layer instead of being guessed at.
+/// `None` for a type this build does not recognise, which is treated like an
+/// interface SystemConfiguration never listed — it falls through to the link
+/// layer rather than being guessed at.
 fn translate(interface: &SCNetworkInterface) -> Option<ScType> {
     Some(match interface.interface_type()? {
         ScNative::Ethernet => ScType::Ethernet,
@@ -105,44 +84,22 @@ fn translate(interface: &SCNetworkInterface) -> Option<ScType> {
 
 /// The network service order, as ranks keyed by BSD interface name.
 ///
-/// This is the list System Settings ▸ Network shows and lets the user drag to
-/// reorder, and it is macOS's own answer to "which link is preferred". Rank 0
-/// is the most preferred. [`crate::servicerank`] turns a rank into the route
-/// metric the selector consumes, and documents why it is only a tie-breaker.
+/// The list System Settings ▸ Network shows, and macOS's own answer to "which
+/// link is preferred". Rank 0 is most preferred; [`crate::servicerank`] turns a
+/// rank into the route metric the selector consumes.
 ///
-/// # The join
+/// The order lists *services*, not interfaces, so it takes two hops: ordered
+/// service IDs, then services, each naming the interface behind it. Ranks are
+/// assigned densely over the interfaces actually resolved, so a service whose ID
+/// does not resolve cannot push every real interface a step down. Where two
+/// services name one interface the first wins, being the higher-priority one.
 ///
-/// The service order is a list of *service* identifiers, not interfaces, so it
-/// takes two hops: `SCNetworkSetGetServiceOrder` gives ordered service IDs,
-/// `SCNetworkServiceCopyAll` gives services, and each service names the
-/// interface behind it. The crate's own `test_service_order` already asserts
-/// that the IDs in the order really do match `SCNetworkService::id()`, so this
-/// join is confirmed upstream rather than assumed here.
-///
-/// Ranks are assigned densely over the interfaces actually resolved: a service
-/// whose ID does not resolve to a BSD name — a VPN service that is configured
-/// but not connected, for instance — is skipped without consuming a rank, so a
-/// stale entry cannot push every real interface one step down.
-///
-/// Two services can name the same interface (a second configuration on `en0`).
-/// The first wins, since that is the higher-priority one and the second says
-/// nothing new about the link.
-///
-/// # Infallible, like [`interface_types`]
-///
-/// An empty map is a legitimate answer, not a failure: every interface then
-/// gets the same metric and ranking degrades to what it was before this
-/// existed. AutoNet reporting a slightly worse-ordered answer beats AutoNet
-/// reporting no address at all.
-///
-/// Nothing here writes. `SCNetworkSetSetServiceOrder` is never called, and
-/// reading the configuration needs no elevated privileges.
-///
-/// # Status
+/// Infallible, like [`interface_types`]: an empty map means every interface gets
+/// the same metric. Nothing here writes, and reading needs no privileges.
 ///
 /// **Unverified on hardware.** The call chain type-checks and the ID join is
-/// tested upstream, but that the resulting order matches what System Settings
-/// displays is confirmed only by running on a Mac with two links up.
+/// tested upstream, but matching what System Settings displays needs a Mac with
+/// two links up.
 pub(crate) fn service_order() -> HashMap<String, u32> {
     let preferences = SCPreferences::default(&CFString::new("autonet"));
     let Some(set) = current_set(&preferences) else {
@@ -161,11 +118,10 @@ pub(crate) fn service_order() -> HashMap<String, u32> {
         })
         .collect();
 
-    // `SCNetworkService::enabled()` is deliberately not consulted: the vendored
-    // crate implements it as `SCNetworkServiceGetEnabled(..) == 0`, which
-    // reports a *disabled* service as enabled. Whether a link is usable already
-    // comes from `IFF_UP` in `super::ifaddrs`, which is the kernel's answer
-    // rather than the configuration's, so nothing is lost by leaving it alone.
+    // `SCNetworkService::enabled()` is not consulted: the vendored crate
+    // implements it as `SCNetworkServiceGetEnabled(..) == 0`, which reports a
+    // disabled service as enabled. `IFF_UP` in `super::ifaddrs` already answers
+    // this, and from the kernel rather than the configuration.
     let order = set.service_order();
     let mut ranked: HashMap<String, u32> = HashMap::new();
     let mut rank = 0u32;
@@ -185,18 +141,15 @@ pub(crate) fn service_order() -> HashMap<String, u32> {
 
 /// The machine's current network set, or `None` if it has none.
 ///
-/// Not `SCNetworkSet::new`, which is the obvious call and is unsound:
-/// `network_configuration.rs:281` wraps `SCNetworkSetCopyCurrent`'s result
-/// without a null check, so a machine with no current set gets a `CFRelease`
-/// of a null pointer when the wrapper drops — a hard crash rather than an
-/// error. Calling through the re-exported `sys` bindings lets the pointer be
-/// checked before it is wrapped, which is the entire reason for the raw FFI
-/// here; everything else goes through the safe API.
+/// Not `SCNetworkSet::new`, which is unsound: `network_configuration.rs:281`
+/// wraps `SCNetworkSetCopyCurrent`'s result without a null check, so a machine
+/// with no current set gets a `CFRelease` of null when the wrapper drops. Going
+/// through the `sys` bindings lets the pointer be checked first, which is the
+/// only reason for raw FFI here.
 fn current_set(preferences: &SCPreferences) -> Option<SCNetworkSet> {
-    // SAFETY: `preferences` is a live `SCPreferences`, and its concrete ref is
-    // exactly the `SCPreferencesRef` this function expects. The result follows
-    // the Core Foundation *Copy* rule — we own a reference — so it is wrapped
-    // under the create rule, and only after being checked for null.
+    // SAFETY: `preferences` is a live `SCPreferences` whose concrete ref is the
+    // `SCPreferencesRef` expected here. The result follows the Core Foundation
+    // Copy rule, so it is wrapped under the create rule after a null check.
     let set = unsafe { SCNetworkSetCopyCurrent(preferences.as_concrete_TypeRef()) };
     if set.is_null() {
         return None;

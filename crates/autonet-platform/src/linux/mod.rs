@@ -1,15 +1,9 @@
 //! The Linux backend, built on rtnetlink.
 //!
-//! Linux exposes network configuration through netlink rather than a stable
-//! C API, and `rtnetlink` is the mature client for it. It was chosen over
-//! shelling out to `ip -j` (which would make AutoNet depend on iproute2 being
-//! installed and on its JSON staying stable) and over `getifaddrs` (which
-//! reports addresses but not routes — and routes are the strongest signal that
-//! an interface can actually reach anything).
-//!
-//! It also subscribes to netlink multicast groups, which is exactly what
-//! `autonet watch` needs in M4. That is the second reason for the choice: the
-//! change-notification story is already in the crate we are using.
+//! Chosen over shelling out to `ip -j`, which would depend on iproute2 being
+//! installed and on its JSON staying stable, and over `getifaddrs`, which
+//! reports addresses but not routes. `rtnetlink` also subscribes to netlink
+//! multicast groups, which is what `autonet watch` needs in M4.
 
 mod netlink;
 mod sysfs;
@@ -23,11 +17,9 @@ use crate::{NetworkProvider, PlatformError};
 pub(crate) struct LinuxProvider {
     /// A private, single-threaded runtime.
     ///
-    /// Built once and reused: creating a runtime per snapshot would cost a
-    /// thread and an epoll instance on every `autonet ip`, and `watch` will
-    /// call `snapshot` in a loop. It is `current_thread` because netlink is one
-    /// socket doing three short dumps — a work-stealing pool would add
-    /// scheduling overhead and buy nothing.
+    /// Built once and reused: a runtime per snapshot would cost a thread and an
+    /// epoll instance on every `autonet ip`. `current_thread` because netlink is
+    /// one socket doing three short dumps.
     runtime: Runtime,
 }
 

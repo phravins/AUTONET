@@ -1,11 +1,4 @@
-//! Classification of addresses and interfaces.
-//!
-//! These are pure functions over names and IPs — no syscalls, no `/sys` reads.
-//! Platform backends gather the raw facts; this module decides what they mean.
-//!
-//! Address scopes are derived by hand rather than with `std`'s inherent
-//! predicates, because most of the interesting IPv6 ones (`is_unicast_link_local`,
-//! `is_unique_local`, `is_documentation`) are still nightly-only.
+//! Pure address and interface classification.
 
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
@@ -34,16 +27,14 @@ pub fn classify_ipv4(ip: &Ipv4Addr) -> AddressScope {
     if ip.is_link_local() {
         return AddressScope::LinkLocal;
     }
-    // RFC 6598 carrier-grade NAT, 100.64.0.0/10. Checked before the private
-    // ranges because it is neither private nor usefully global: a developer
-    // handed one of these usually cannot be reached at it.
+    // RFC 6598 carrier-grade NAT, 100.64.0.0/10.
     if o[0] == 100 && (64..=127).contains(&o[1]) {
         return AddressScope::Cgnat;
     }
     if ip.is_private() {
         return AddressScope::Private;
     }
-    // Documentation (RFC 5737), benchmarking (RFC 2544), and reserved (240/4).
+    // Documentation, benchmarking, and reserved ranges.
     let is_documentation = matches!(
         (o[0], o[1], o[2]),
         (192, 0, 2) | (198, 51, 100) | (203, 0, 113)

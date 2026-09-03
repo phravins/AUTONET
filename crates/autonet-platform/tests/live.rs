@@ -1,43 +1,4 @@
-//! Checks that run against the machine's real network.
-//!
-//! Every test here is `#[ignore]`d. They exercise the one part of AutoNet that
-//! genuinely cannot be tested from a fixture — the translation from kernel
-//! structures into a `NetworkState` — and their results depend on which Wi-Fi
-//! network the host happens to be on. Making CI depend on that would produce
-//! failures that say nothing about the code.
-//!
-//! Run them deliberately:
-//!
-//! ```sh
-//! cargo test -p autonet-platform -- --ignored --nocapture
-//! ```
-//!
-//! # What these tests may and may not assume
-//!
-//! Every assertion here has to hold on *any* machine that is working correctly.
-//! "This host has Wi-Fi", "this host is online", "there is exactly one default
-//! route" are all properties of a particular setup, and asserting one turns a
-//! correctly-configured machine into a red test — a bug in the test, not in the
-//! backend. Where a check only makes sense on some machines, the test either
-//! narrows its scope (default routes only, non-tunnel interfaces only) or skips
-//! with a printed explanation.
-//!
-//! # The macOS group
-//!
-//! The tests below marked `#[cfg(target_os = "macos")]` exist to falsify four
-//! things the macOS routing parser currently asserts *from Apple's headers
-//! rather than from a running system*: Darwin's four-byte sockaddr `ROUNDUP`,
-//! the zero-length netmask of a default route, on-link gateways arriving as a
-//! `sockaddr_dl`, and the `SIOCGIFAFLAG_IN6` union layout. Each of those fails
-//! quietly — a wrong `ROUNDUP` produces plausible-looking wrong addresses, not
-//! a panic — so the assertions are aimed at *garbage that still parses*: a
-//! prefix that leaves host bits set, a gateway in the wrong family, a source
-//! address bound to some other interface.
-//!
-//! One further cross-check, comparing `rtm_index` against `RTA_IFP`, cannot
-//! live here: `Route` models a single interface index, so `RTA_IFP` never
-//! crosses the platform boundary. It is an `#[ignore]`d unit test inside
-//! `src/macos/route.rs` instead, and runs under the same command as these.
+//! Ignored checks against the machine's live network.
 
 use autonet_core::model::{AddressScope, InterfaceKind, IpNetwork};
 use autonet_platform::provider;
@@ -55,8 +16,7 @@ fn the_snapshot_describes_a_plausible_machine() {
         "snapshot should be timestamped"
     );
 
-    // Every operating system AutoNet supports has a loopback interface. If this
-    // fails, the enumeration is broken rather than the machine being unusual.
+    // Every supported platform has a loopback interface.
     let loopback = state
         .interfaces
         .iter()
@@ -71,8 +31,7 @@ fn the_snapshot_describes_a_plausible_machine() {
         loopback.addresses
     );
 
-    // Interface indexes are the join key for addresses and routes, so a
-    // duplicate or a zero would silently corrupt the whole snapshot.
+    // Interface indexes join addresses and routes.
     let mut indexes: Vec<u32> = state.interfaces.iter().map(|i| i.index).collect();
     let count = indexes.len();
     indexes.sort_unstable();
@@ -80,7 +39,7 @@ fn the_snapshot_describes_a_plausible_machine() {
     assert_eq!(indexes.len(), count, "duplicate interface indexes");
     assert!(!indexes.contains(&0), "interface index 0 is not valid");
 
-    // Names must be unique too: config rules and `--interface` match on them.
+    // Names are used by configuration rules.
     let mut names: Vec<&str> = state.interfaces.iter().map(|i| i.name.as_str()).collect();
     let count = names.len();
     names.sort_unstable();

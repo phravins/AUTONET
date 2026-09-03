@@ -1,8 +1,4 @@
-//! Human-readable output.
-//!
-//! Text rendering lives apart from the commands so that adding `doctor` or
-//! `watch` later is a matter of writing new renderers over the same values,
-//! not of restructuring how output happens.
+//! Terminal-output helpers.
 
 use std::io::IsTerminal;
 
@@ -15,13 +11,7 @@ pub struct Theme {
 }
 
 impl Theme {
-    /// Decide whether colour is appropriate for stdout.
-    ///
-    /// Colour is for humans reading a terminal. When stdout is a pipe or a
-    /// file, escape codes are corruption — `IP=$(autonet ip)` must not capture
-    /// them — so the check is on the stream itself rather than on a flag the
-    /// user has to remember. `NO_COLOR` is honoured because it is the
-    /// cross-tool convention for people who never want it.
+    /// Enable color only for interactive terminals.
     pub fn detect() -> Self {
         let forbidden = std::env::var_os("NO_COLOR").is_some_and(|v| !v.is_empty())
             || std::env::var_os("TERM").is_some_and(|t| t == "dumb");

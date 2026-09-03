@@ -1,31 +1,18 @@
 //! Interfaces and addresses, from `getifaddrs(3)`.
 //!
-//! This mirrors the Linux backend's structure deliberately: a link pass that
-//! establishes which devices exist, then an address pass that attaches IPs to
-//! them. `getifaddrs` returns both kinds of record interleaved in one list —
-//! an `AF_LINK` node per device followed by an `AF_INET`/`AF_INET6` node per
-//! address — so the split is ours, not the API's.
+//! A link pass establishing which devices exist, then an address pass attaching
+//! IPs to them. `getifaddrs` interleaves both kinds of record in one list, so
+//! the split is ours, not the API's.
 //!
-//! # Why the link pass is not simply `if-addrs`
+//! The link pass is not `if-addrs`, which yields one record per *address* and
+//! silently drops interfaces that have none — an Ethernet port with a cable but
+//! no lease would vanish. The device list is built from the `AF_LINK` records,
+//! which also carry the interface flags, hardware address and MTU that
+//! `if-addrs` does not expose. `if-addrs` is used only for what it is good at:
+//! `sockaddr` to `IpAddr`, and netmask to prefix length.
 //!
-//! `if_addrs::get_if_addrs()` yields one record per *address* and silently
-//! drops any interface that has none: its conversion returns `None` for
-//! `AF_LINK` nodes, and the loop skips them. An Ethernet port with a cable but
-//! no DHCP lease, or a `bridge0` with no address, would vanish from the
-//! snapshot entirely — while Linux reports both, because netlink's link dump is
-//! a separate query from its address dump.
-//!
-//! So the device list is built here from the `AF_LINK` records, which also
-//! carry the three things `if-addrs` does not expose at all: the interface
-//! flags, the hardware address, and the MTU. `if-addrs` is then used for what
-//! it is good at — turning a `sockaddr` into an `IpAddr` and a netmask into a
-//! prefix length.
-//!
-//! # Status
-//!
-//! **Unverified on hardware.** Compiled and type-checked for both
-//! `aarch64-apple-darwin` and `x86_64-apple-darwin`, but every claim about
-//! struct layout here is read from headers, not observed on a Mac.
+//! **Unverified on hardware.** Type-checked for both Darwin targets, but every
+//! claim about struct layout is read from headers rather than observed.
 
 use std::collections::{BTreeMap, HashMap};
 use std::ffi::CStr;
@@ -42,16 +29,14 @@ use crate::PlatformError;
 
 /// What SystemConfiguration calls each interface, keyed by BSD name.
 ///
-/// Gathered once per snapshot and threaded through the walk, because
-/// `SCNetworkInterfaceCopyAll` enumerates everything in a single call — there
-/// is no per-interface framework call anywhere here.
+/// Gathered once per snapshot and threaded through the walk: there is no
+/// per-interface framework call anywhere here.
 type ScTypes = HashMap<String, ScType>;
 
 /// Capture the machine's interfaces and their addresses.
 ///
-/// Routes come from a separate source — see [`super::route`] — and are joined
-/// on the interface index by the caller, mirroring how the Linux backend keeps
-/// its link, address and route dumps as three distinct netlink queries.
+/// Routes come from [`super::route`] and are joined on the interface index by
+/// the caller.
 pub(crate) fn interfaces(sc_types: &ScTypes) -> Result<Vec<Interface>, PlatformError> {
     let mut interfaces = links(sc_types)?;
     attach_addresses(&mut interfaces)?;
@@ -65,9 +50,8 @@ pub(crate) fn interfaces(sc_types: &ScTypes) -> Result<Vec<Interface>, PlatformE
 
 /// Every device the kernel reports, keyed by name.
 ///
-/// Keyed by name rather than index because that is the only join key the
-/// address pass has. A `BTreeMap` for the same reason as the Linux backend's:
-/// it makes `autonet interfaces` list devices in a stable order between runs.
+/// Keyed by name because that is the only join key the address pass has. A
+/// `BTreeMap` so `autonet interfaces` lists devices in a stable order.
 fn links(sc_types: &ScTypes) -> Result<BTreeMap<String, Interface>, PlatformError> {
     let mut head: *mut libc::ifaddrs = std::ptr::null_mut();
 
@@ -121,10 +105,9 @@ fn link_from(entry: &libc::ifaddrs, sc_types: &ScTypes) -> Option<Interface> {
     let is_loopback = has(flags, libc::IFF_LOOPBACK);
     let point_to_point = has(flags, libc::IFF_POINTOPOINT);
 
-    // Three independent sources, weighed in `linktype`: the two flags the
-    // kernel set, what SystemConfiguration calls this BSD name, and the link
-    // type the driver reported. The name itself is passed only as a map key —
-    // it is never evidence.
+    // Three sources, weighed in `linktype`: the kernel's flags, what
+    // SystemConfiguration calls this BSD name, and the driver's link type. The
+    // name is a map key, never evidence.
     let kind = linktype::classify(Evidence {
         loopback: is_loopback,
         point_to_point,
@@ -154,9 +137,8 @@ fn link_from(entry: &libc::ifaddrs, sc_types: &ScTypes) -> Option<Interface> {
 
 /// The interface name, or `None` if it is absent or not UTF-8.
 ///
-/// A device we cannot name is one no config rule could match and no user could
-/// act on, so it is dropped rather than given a synthetic name — the same
-/// choice the Linux backend makes for a link with no `IFLA_IFNAME`.
+/// An unnameable device is one no config rule could match and no user could act
+/// on, so it is dropped rather than given a synthetic name.
 fn name_of(entry: &libc::ifaddrs) -> Option<String> {
     if entry.ifa_name.is_null() {
         return None;
@@ -169,12 +151,11 @@ fn name_of(entry: &libc::ifaddrs) -> Option<String> {
 /// The hardware address carried by an `AF_LINK` record.
 ///
 /// `libc` declares `sdl_data` as `[c_char; 12]`, but the kernel's structure is
-/// variable-length: `sdl_nlen` bytes of interface name followed by `sdl_alen`
-/// bytes of hardware address. On `bridge100` the address starts at offset 17
-/// and runs past the end of the 20-byte `sockaddr_dl` Rust believes in, so
-/// **copying the struct by value would truncate the MAC**. The bytes are read
-/// through the pointer `getifaddrs` gave us, which addresses the real, longer
-/// allocation, and bounds-checked against the `sdl_len` the kernel wrote.
+/// variable-length: `sdl_nlen` name bytes then `sdl_alen` address bytes. On
+/// `bridge100` the address starts at offset 17, past the end of the 20-byte
+/// `sockaddr_dl` Rust believes in, so **copying the struct by value would
+/// truncate the MAC**. The bytes are read through the pointer instead, bounds-
+/// checked against the `sdl_len` the kernel wrote.
 ///
 /// # Safety
 ///
@@ -189,9 +170,8 @@ unsafe fn hardware_address(link: *const libc::sockaddr_dl) -> Option<String> {
         )
     };
 
-    // Anything claiming to reach past `sdl_len` is malformed, and a `sdl_alen`
-    // that is not six is not a MAC — `format_mac` would reject it anyway, but
-    // the check has to happen before the read, not after.
+    // Anything reaching past `sdl_len` is malformed. `format_mac` would reject
+    // a non-six `sdl_alen` anyway, but the check must precede the read.
     let offset = std::mem::offset_of!(libc::sockaddr_dl, sdl_data) + name_len;
     if addr_len != 6 || offset + addr_len > total {
         return None;
@@ -207,14 +187,12 @@ unsafe fn hardware_address(link: *const libc::sockaddr_dl) -> Option<String> {
 
 /// The link type the driver reported, from the same `if_data` block as the MTU.
 ///
-/// `ifi_type` is the first byte of `if_data`, so unlike `ifi_mtu` there is no
-/// offset arithmetic and no alignment question — a `u8` read is aligned
-/// everywhere. It is still read through the pointer rather than by copying the
-/// struct, for the reason spelled out on [`mtu_of`].
+/// `ifi_type` is the first byte of `if_data`, so there is no offset arithmetic
+/// and no alignment question. Still read through the pointer rather than by
+/// copying the struct, for the reason on [`mtu_of`].
 ///
-/// A null `ifa_data` yields [`linktype::IFI_TYPE_UNSPECIFIED`], which is the
-/// value the header itself uses for "unspecified", so an absent `if_data` block
-/// and an uninformative one take the same path through the classifier.
+/// A null `ifa_data` yields [`linktype::IFI_TYPE_UNSPECIFIED`], so an absent
+/// `if_data` block and an uninformative one take the same path.
 fn ifi_type_of(entry: &libc::ifaddrs) -> u8 {
     if entry.ifa_data.is_null() {
         return linktype::IFI_TYPE_UNSPECIFIED;
@@ -233,15 +211,13 @@ fn ifi_type_of(entry: &libc::ifaddrs) -> u8 {
 
 /// The MTU, from the `if_data` block `getifaddrs` hangs off an `AF_LINK` entry.
 ///
-/// Only the four bytes of `ifi_mtu` are read, at their offset, rather than the
-/// whole `if_data` by value. Nothing tells us how many bytes `ifa_data` really
-/// points at, so if the running kernel's `if_data` were ever shorter than the
-/// one `libc` describes, a by-value read would run off the end of it — the same
-/// class of mistake as trusting `sockaddr_dl`'s declared size. `ifi_mtu` sits
-/// eight bytes in, so this reads a small, stable prefix instead.
+/// Only `ifi_mtu`'s four bytes are read, at their offset, rather than the whole
+/// `if_data` by value: nothing says how many bytes `ifa_data` points at, so a
+/// by-value read of a shorter kernel struct would run off the end — the same
+/// mistake as trusting `sockaddr_dl`'s declared size.
 ///
-/// A zero MTU is reported as absent rather than as zero: it means the driver
-/// did not fill the field in, and "0" would read as a real, absurd value.
+/// A zero MTU is reported as absent: the driver did not fill the field in, and
+/// "0" would read as a real, absurd value.
 fn mtu_of(entry: &libc::ifaddrs) -> Option<u32> {
     if entry.ifa_data.is_null() {
         return None;
@@ -252,10 +228,9 @@ fn mtu_of(entry: &libc::ifaddrs) -> Option<u32> {
         .cast::<u8>()
         .wrapping_add(std::mem::offset_of!(libc::if_data, ifi_mtu));
 
-    // The bytes are copied out and reassembled rather than read through a
-    // `*const u32`: `ifa_data` is an untyped pointer, so nothing promises the
-    // alignment that cast would claim, and native byte order is right because
-    // the kernel wrote the field on this machine.
+    // Copied out and reassembled rather than read through a `*const u32`:
+    // `ifa_data` is untyped, so nothing promises that cast's alignment. Native
+    // byte order is right because the kernel wrote the field on this machine.
     let mut bytes = [0u8; 4];
     // SAFETY: for an `AF_LINK` record `ifa_data` points at a `struct if_data`,
     // whose `ifi_mtu` lies wholly within the first sixteen bytes.
@@ -357,19 +332,16 @@ const _: () = {
 
 /// A socket kept open for the duration of one address pass.
 ///
-/// One socket for every IPv6 address on the machine rather than one per
-/// address: the ioctl needs *a* socket of the right family, not a connection,
-/// and opening a descriptor per address would be a syscall per address for no
-/// benefit.
+/// One socket for every IPv6 address rather than one each: the ioctl needs *a*
+/// socket of the right family, not a connection.
 struct V6Flags(Option<c_int>);
 
 impl V6Flags {
     /// Open the socket, or record that there is none.
     ///
-    /// Failure is not an error. A machine with IPv6 disabled cannot open an
-    /// `AF_INET6` socket, and on such a machine there are no IPv6 addresses to
-    /// ask about anyway. Degrading to "no flags known" costs the `is_temporary`
-    /// marking; failing the snapshot would cost the user every address.
+    /// Failure is not an error: a machine with IPv6 disabled has no IPv6
+    /// addresses to ask about. Degrading costs the `is_temporary` marking;
+    /// failing the snapshot would cost the user every address.
     fn open() -> Self {
         // SAFETY: `socket` takes no memory from us and returns -1 on failure.
         let fd = unsafe { libc::socket(libc::AF_INET6, libc::SOCK_DGRAM, 0) };
@@ -378,12 +350,10 @@ impl V6Flags {
 
     /// The kernel's flags for one address on one interface.
     ///
-    /// `None` when the query could not be made — no socket, a name too long for
-    /// `ifr_name`, or an ioctl that failed because the address disappeared
-    /// between `getifaddrs` and now. The caller treats all of those as "no
-    /// flags set", which is the conservative answer: an address is reported as
-    /// permanent unless the kernel says otherwise, so an unanswered query can
-    /// never invent a reason to drop or penalise a usable address.
+    /// `None` when the query could not be made — no socket, an over-long name,
+    /// or an address that disappeared since `getifaddrs`. The caller reads all
+    /// of those as "no flags set", so an unanswered query can never invent a
+    /// reason to drop or penalise a usable address.
     fn of(&self, name: &str, ip: Ipv6Addr) -> Option<c_int> {
         let fd = self.0?;
 
@@ -442,17 +412,15 @@ impl Drop for V6Flags {
 /// An interface that appeared in the address list but not in the link walk.
 ///
 /// `getifaddrs` reports an `AF_LINK` record for every device, so this should
-/// never fire. It exists because the alternative — dropping the address —
-/// would lose a real, usable IP if that assumption is ever wrong, and an
-/// interface missing its MTU is a far smaller lie than a missing address.
+/// never fire. Dropping the address instead would lose a real, usable IP if
+/// that assumption is ever wrong.
 fn orphan(name: &str, index: Option<u32>) -> Interface {
     Interface {
         name: name.to_owned(),
         index: index.unwrap_or_default(),
-        // No `AF_LINK` record means no flags and no `ifi_type`, so there is no
-        // evidence to classify from. Consulting SystemConfiguration alone would
-        // work, but an interface that reached this branch already contradicts
-        // what `getifaddrs` promises; saying so is better than half an answer.
+        // No `AF_LINK` record means no flags and no `ifi_type`, so nothing to
+        // classify from. An interface reaching here already contradicts what
+        // `getifaddrs` promises; saying so beats half an answer.
         kind: InterfaceKind::Other(UNCLASSIFIED.to_owned()),
         state: InterfaceState::Unknown,
         flags: InterfaceFlags::default(),
@@ -476,16 +444,13 @@ fn has(flags: c_uint, flag: c_int) -> bool {
 
 /// Map `ifa_flags` onto AutoNet's state, matching the Linux backend's rules.
 ///
-/// The interesting case is administratively up but not `IFF_RUNNING`, which
-/// resolves to `Unknown` rather than `Down`. `utun` devices report exactly that
-/// while carrying traffic, and the selection engine treats only `Down` as
-/// disqualifying — so guessing "down" here would make `autonet ip --interface
-/// utun3` fail on a healthy tunnel.
+/// Administratively up but not `IFF_RUNNING` resolves to `Unknown`, not `Down`:
+/// `utun` devices report exactly that while carrying traffic, and only `Down` is
+/// disqualifying, so guessing here would fail `--interface utun3` on a healthy
+/// tunnel.
 ///
-/// macOS offers no equivalent of Linux's `IF_OPER_DORMANT`, so `Dormant` is
-/// never produced here. That is a real difference between the platforms rather
-/// than an omission: nothing in the flags distinguishes "associating" from
-/// "associated".
+/// macOS has no equivalent of Linux's `IF_OPER_DORMANT`, so `Dormant` is never
+/// produced — a real difference between the platforms, not an omission.
 fn interface_state(flags: c_uint) -> InterfaceState {
     if !has(flags, libc::IFF_UP) {
         InterfaceState::Down
@@ -556,8 +521,7 @@ mod tests {
     #[test]
     fn an_interface_the_link_walk_missed_is_not_guessed_at() {
         // Notably *not* Ethernet, which is what name-based classification
-        // would return for en0. The decision table itself is exercised in
-        // `linktype`, whose tests run on every platform rather than only here.
+        // would return for en0. The table itself is exercised in `linktype`.
         assert_eq!(
             orphan("en0", Some(4)).kind,
             InterfaceKind::Other(UNCLASSIFIED.to_owned())

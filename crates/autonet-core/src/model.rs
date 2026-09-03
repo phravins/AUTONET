@@ -1,14 +1,4 @@
-//! The structured representation of a machine's network state.
-//!
-//! AutoNet deliberately models interfaces and addresses as *objects*, not as IP
-//! strings. The selection engine needs to reason about interface kind, link
-//! state, address scope, and — critically — whether an interface owns a default
-//! route. None of that survives being flattened to `"192.168.1.101"`.
-//!
-//! Nothing in this module talks to the operating system. A [`NetworkState`] is
-//! a plain value that can be built by a platform backend *or* deserialized from
-//! a JSON fixture, which is what makes the selection engine deterministically
-//! testable.
+//! Serializable network-state data model.
 
 use std::fmt;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
@@ -18,11 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::CoreError;
 
-/// Version of the JSON wire format emitted by AutoNet.
-///
-/// Every machine-readable payload carries this. SDKs bind to this shape, so it
-/// is present from the first release rather than retrofitted once something
-/// already depends on the schema.
+/// Version of the JSON wire format.
 pub const SCHEMA_VERSION: u32 = 1;
 
 /// An IP address family.

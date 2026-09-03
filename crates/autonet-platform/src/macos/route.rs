@@ -1,39 +1,21 @@
 //! Dumping the kernel routing table over the BSD routing socket.
 //!
-//! This module is only the syscall. Every decision about what the returned
-//! bytes *mean* lives in [`crate::rtparse`], which is not gated to macOS so that
-//! its tests run on the Linux CI job too — sockaddr misalignment is the classic
-//! way a routing parser goes subtly wrong, and those tests are the only thing
-//! standing between a padding mistake and plausible-looking wrong addresses.
+//! Only the syscall: what the returned bytes *mean* is [`crate::rtparse`]'s,
+//! which is not gated to macOS so its tests run on Linux — sockaddr
+//! misalignment is the classic way a routing parser goes subtly wrong.
 //!
-//! # `sysctl`, not a routing socket read
+//! `sysctl` rather than a `PF_ROUTE` socket read, because it returns the whole
+//! table as one consistent snapshot with no descriptor to leak and no
+//! partial-read handling. Nothing here parses OS *text*: `netstat` and `route`
+//! output is localised and version-dependent.
 //!
-//! `PF_ROUTE` can be opened as a socket and asked for the table one message at
-//! a time, but the `sysctl` form returns the whole table in a single consistent
-//! snapshot with no file descriptor to leak and no partial-read handling. It is
-//! also what `netstat -rn` uses. AutoNet wants a snapshot, so this is the
-//! natural fit.
+//! `NET_RT_DUMP` rather than `NET_RT_DUMP2`: the latter's `rt_msghdr2` differs
+//! only in fields AutoNet does not model, `rt_metrics` is inline in plain
+//! `rt_msghdr` too, and DUMP2 is absent from `libc`.
 //!
-//! Nothing here parses OS *text*. `netstat` and `route` output is localised,
-//! version-dependent, and would make AutoNet's answer depend on the user's
-//! locale; this is the same rigour the Linux backend's netlink code applies.
-//!
-//! # `NET_RT_DUMP`, not `NET_RT_DUMP2`
-//!
-//! `NET_RT_DUMP2` returns `rt_msghdr2`, which differs from `rt_msghdr` only by
-//! replacing `rtm_pid`/`rtm_seq`/`rtm_errno` with
-//! `rtm_refcnt`/`rtm_parentflags`/`rtm_reserved`. AutoNet models none of those.
-//! In particular `rt_metrics` is inline in the *plain* `rt_msghdr` as well, so
-//! the usual reason to reach for DUMP2 does not apply. DUMP2 is also absent
-//! from `libc` and would have to be hardcoded. So: `NET_RT_DUMP`, which `libc`
-//! defines and which carries everything that is modelled.
-//!
-//! # Status
-//!
-//! **Unverified against a live routing table.** The `sysctl` MIB, the
-//! two-call sizing and the message layout are read from Apple's headers and
-//! checked against `libc` at compile time. That a real dump behaves as
-//! described is confirmed only by running on a Mac.
+//! **Unverified against a live routing table.** The MIB, two-call sizing and
+//! message layout are checked against `libc` at compile time; that a real dump
+//! behaves as described needs a Mac.
 
 use std::collections::HashMap;
 use std::io;
@@ -48,27 +30,19 @@ use crate::PlatformError;
 /// and the read.
 ///
 /// The table can change under us — a DHCP lease, a VPN coming up — so `ENOMEM`
-/// on the second call is expected occasionally rather than exceptional. Bounded
-/// so that a pathologically churning table fails with an error instead of
-/// spinning forever.
+/// on the second call is occasional rather than exceptional. Bounded so a
+/// churning table fails with an error instead of spinning.
 const RESIZE_ATTEMPTS: usize = 4;
 
 /// Every route the kernel knows, both families.
 ///
-/// Two dumps, because `NET_RT_DUMP` takes an address family in its MIB and
-/// returns only that family's routes. This mirrors the Linux backend, which
-/// also dumps per-family rather than trusting `AF_UNSPEC` to return both.
+/// Two dumps, because `NET_RT_DUMP` takes a family in its MIB and returns only
+/// that family's routes. An empty result is a legitimate answer.
 ///
-/// An empty result is a legitimate answer, not a failure: with every interface
-/// down there are no routes, and `NetworkState` already represents that as an
-/// empty vector.
-///
-/// `metrics` maps interface index to the metric each route on it should carry.
-/// Nothing in a routing message supplies one on Darwin, so it is passed in
-/// already resolved by [`crate::servicerank`] from the network service order —
-/// which is why this function takes a map rather than looking anything up:
-/// route parsing stays free of interface names, and the one place that decides
-/// what a metric *means* on macOS stays testable on Linux.
+/// `metrics` maps interface index to the metric each route should carry. Nothing
+/// in a Darwin routing message supplies one, so it arrives already resolved by
+/// [`crate::servicerank`]; taking a map keeps route parsing free of interface
+/// names and the metric decision testable on Linux.
 pub(crate) fn dump_routes(metrics: &HashMap<u32, u32>) -> Result<Vec<Route>, PlatformError> {
     let mut routes = Vec::new();
     for family in [Family::V4, Family::V6] {
@@ -171,9 +145,8 @@ fn dump(family: Family) -> Result<Vec<u8>, PlatformError> {
 
 /// Describe a failed dump in terms of what was being asked for.
 ///
-/// Spelled out per family rather than formatted, because `PlatformError::Query`
-/// holds a `&'static str` — the error type is deliberately allocation-free for
-/// the operation name.
+/// Spelled out per family rather than formatted: `PlatformError::Query` holds a
+/// `&'static str`.
 fn query(family: Family, error: io::Error) -> PlatformError {
     let operation = match family {
         Family::V4 => "dump the IPv4 routing table",
@@ -189,40 +162,20 @@ mod tests {
 
     /// Cross-check `rtm_index` against the `RTA_IFP` sockaddr on a live table.
     ///
-    /// # Why this is not in `tests/live.rs`
+    /// Not in `tests/live.rs` because it cannot be: `RTA_IFP` is consumed inside
+    /// [`crate::rtparse::routes`] and never crosses the platform boundary. Runs
+    /// with the rest under `cargo test -p autonet-platform -- --ignored`.
     ///
-    /// It cannot be. `Route` models a single interface index, so `RTA_IFP` is
-    /// consumed inside [`crate::rtparse::routes`] and never crosses the
-    /// platform boundary — an integration test has no way to see the second
-    /// number, which is why this is the one live test that lives in the crate.
-    /// It carries the same `#[ignore]` marking as the rest and runs under the
-    /// same command:
+    /// `RTA_IFP` sits immediately after the netmask, and a default route's
+    /// netmask is the one sockaddr written with `sa_len == 0` — the only length
+    /// at which Darwin's four-byte `ROUNDUP` and FreeBSD's eight-byte one
+    /// disagree. So this is the most specific detector for the alignment rule
+    /// the parser takes from `<net/route.h>` rather than from a running kernel.
+    /// It also catches a genuine disagreement, which would mean routes are being
+    /// joined to the wrong interface.
     ///
-    /// ```sh
-    /// cargo test -p autonet-platform -- --ignored --nocapture
-    /// ```
-    ///
-    /// # What a failure would mean
-    ///
-    /// `RTA_IFP` is the slot immediately after the netmask, and the netmask of
-    /// a default route is the one sockaddr the kernel writes with `sa_len == 0`
-    /// — the only length at which Darwin's four-byte `ROUNDUP` and FreeBSD's
-    /// eight-byte one disagree. So this is the most specific detector available
-    /// for the alignment rule the parser asserts from `<net/route.h>` rather
-    /// than from a running kernel: with the wrong stride, `RTA_IFP` is read
-    /// from the middle of some other sockaddr and the index it reports has no
-    /// reason to match the header's.
-    ///
-    /// It also catches the reverse — a genuine disagreement between the two,
-    /// which would mean `rtparse::routes` is joining routes to the wrong
-    /// interface.
-    ///
-    /// # Its limit
-    ///
-    /// `RTA_IFP` is optional. A dump in which no message carries one leaves
-    /// nothing to compare and the test passes vacuously, so the count is
-    /// printed: a run reporting zero has proven nothing and should be read that
-    /// way.
+    /// `RTA_IFP` is optional, so a dump carrying none passes vacuously. The
+    /// count is printed: a run reporting zero has proven nothing.
     #[test]
     #[ignore = "queries the live routing table"]
     fn rtm_index_and_rta_ifp_name_the_same_interface() {

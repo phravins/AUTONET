@@ -1,34 +1,25 @@
 //! The one thing netlink does not tell us: whether a link is Wi-Fi.
 //!
-//! `IFLA_INFO_KIND` is empty for physical NICs — the kernel reports a driver
-//! name for virtual devices (`bridge`, `veth`, `wireguard`) but nothing at all
-//! for a real Ethernet port or a real wireless card. So netlink alone cannot
-//! distinguish `eno2` from `wlo1`.
+//! `IFLA_INFO_KIND` is empty for physical NICs — the kernel names a driver for
+//! virtual devices but nothing for a real Ethernet port or wireless card — so
+//! netlink alone cannot distinguish `eno2` from `wlo1`.
 //!
-//! sysfs can. The cfg80211 subsystem symlinks `phy80211` into every wireless
-//! netdev's sysfs directory, so its presence is an exact test rather than a
-//! guess at the name. Name prefixes (`wl`, `wlan`) are *not* reliable:
-//! systemd's predictable naming produces `wlp3s0` but also `enp0s31f6`, and
-//! users rename interfaces freely.
-//!
-//! Getting this right matters to selection: Ethernet outscores Wi-Fi, so
-//! misreading `wlo1` as Ethernet would silently invert the docked-laptop
-//! preference.
+//! cfg80211 symlinks `phy80211` into every wireless netdev's sysfs directory,
+//! so its presence is an exact test. Name prefixes are not: systemd's
+//! predictable naming produces both `wlp3s0` and `enp0s31f6`, and users rename
+//! interfaces freely. Ethernet outscores Wi-Fi, so a misread would silently
+//! invert the docked-laptop preference.
 
 use std::path::Path;
 
 /// Whether `name` is a wireless device.
 ///
-/// Checks `phy80211` (cfg80211, every modern driver) and falls back to
-/// `wireless` (the old Wireless Extensions interface, still present for a few
-/// legacy drivers). A missing `/sys` — a container with it unmounted, say —
-/// answers "no" rather than failing: being unsure whether a link is Wi-Fi is
-/// not a reason to refuse to report an address.
+/// Checks `phy80211` (cfg80211) and falls back to `wireless` (the old Wireless
+/// Extensions interface, still present for a few legacy drivers). A missing
+/// `/sys` answers "no" rather than failing.
 pub(crate) fn is_wireless(name: &str) -> bool {
-    // Reject anything that could escape /sys/class/net. Interface names come
-    // from the kernel and are well-formed in practice, but this function builds
-    // a filesystem path out of one, and a path built from external input should
-    // never be able to point somewhere unintended.
+    // This builds a filesystem path out of a name, so reject anything that
+    // could escape /sys/class/net even though kernel names are well-formed.
     if name.is_empty() || name.contains('/') || name.contains("..") {
         return false;
     }

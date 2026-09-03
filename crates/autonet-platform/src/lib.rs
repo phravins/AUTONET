@@ -1,88 +1,37 @@
-//! Operating-system backends for AutoNet.
-//!
-//! This crate is the *only* place in the workspace that talks to the kernel.
-//! Its entire job is to produce one value — an [`autonet_core::NetworkState`] —
-//! and hand it upward. Everything above it (the selection engine, the CLI, the
-//! daemon, the SDKs) operates on that value and never learns which platform it
-//! came from.
-//!
-//! That boundary is what makes the project testable. `autonet-core` is pure
-//! functions over a `NetworkState`, so its tests read snapshots from JSON and
-//! cannot be perturbed by the machine switching Wi-Fi networks mid-run. Only
-//! this crate has to be tested against a live host, and only this crate has to
-//! be rewritten for macOS and Windows.
-//!
-//! # Adding a platform
-//!
-//! Implement [`NetworkProvider`] and wire it into [`provider`] behind a
-//! `#[cfg(target_os = ...)]`. Nothing above this crate changes. Platforms
-//! without a backend yet still *compile*, and fail at runtime with
-//! [`PlatformError::Unsupported`] rather than at build time — a developer on
-//! FreeBSD can build and test the whole workspace before a FreeBSD backend
-//! exists, exactly as macOS and Windows developers could before theirs did.
+//! Operating-system network-discovery backends.
 
 #![deny(missing_docs)]
 #![warn(clippy::pedantic)]
 #![allow(clippy::must_use_candidate)]
-// "AutoNet", "WireGuard" and "Docker" are product names, not code. Wrapping
-// them in backticks would render prose as inline code throughout the docs.
 #![allow(clippy::doc_markdown)]
 
 use autonet_core::model::NetworkState;
 
-// Shared by both real backends rather than living in either: what counts as a
-// reportable MAC is a decision about AutoNet's output, and the two must not
-// drift. Gated on the platforms that have a backend so that a target with none
-// still compiles warning-free, as the module documentation above promises.
+// Shared backend helpers.
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 mod hwaddr;
 
-// Deciding what *sort* of device an interface is, on macOS. Compiled on Linux
-// too — and unused there, hence the allow — so that the decision table and its
-// tests run on the Linux job as well as the macOS one. Task 2 put its logic
-// inside the `cfg`-gated backend and consequently could only be tested on a
-// runner none of us can debug on; keeping the pure part out here is the fix.
-//
-// Windows compiles it for one constant only: `UNCLASSIFIED`, which `wintype`
-// reuses for the same "no source could identify this device" case. The
-// alternative was a second spelling of the same string, which is how two
-// platforms end up disagreeing about a value that appears in `--json`.
+// macOS interface classification.
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 mod linktype;
 
-// Reading BSD routing-socket messages, for the same reason and on the same
-// terms as `linktype` above. It matters more here: sockaddr padding and
-// netmask truncation fail *quietly*, producing plausible wrong addresses rather
-// than an error, so its hand-built-buffer tests need to run somewhere the
-// failure can actually be debugged.
+// macOS routing-message parsing.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 mod rtparse;
 
-// Turning the macOS network service order into a route metric, on the same
-// terms again. This one is pure policy rather than parsing — a scale chosen
-// against the selector's weights — so running its tests on Linux is what keeps
-// the two crates' notions of `metric` from drifting apart unnoticed.
+// macOS service-order metrics.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 mod servicerank;
 
-// Decoding what the IP Helper API hands back, on the same terms as `rtparse`
-// above and for the same reason. A Windows `sockaddr` has no `sa_len` and puts
-// `AF_INET6` at 23 rather than 30 or 10, so an offset or constant error here
-// produces a plausible *wrong address* rather than a failure — and the Windows
-// CI runner is the one machine in this project nobody can attach a debugger to.
-// Keeping the decode out here means its hand-built-buffer tests run on Linux.
+// Windows IP Helper parsing.
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 mod winparse;
 
-// Deciding what *sort* of device an interface is, on Windows — `linktype`'s
-// counterpart, out here for the same reason. A misclassification is the quietest
-// failure this crate has: nothing errors, an address just moves several hundred
-// points up or down the ranking. The decision table needs to be exercised where
-// a failure can be read, not only on the Windows runner.
+// Windows interface classification.
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 mod wintype;
@@ -99,11 +48,7 @@ mod windows;
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 mod unsupported;
 
-/// Something went wrong while asking the operating system about its network.
-///
-/// Deliberately shallow: the underlying netlink / IOCTL / Win32 error types are
-/// platform-specific, so they are rendered to strings at this boundary rather
-/// than leaking a Linux type into a struct the CLI and daemon both handle.
+/// An operating-system network query failed.
 #[derive(Debug, thiserror::Error)]
 pub enum PlatformError {
     /// AutoNet has no backend for this operating system yet.
@@ -134,20 +79,8 @@ impl PlatformError {
 }
 
 /// A source of network snapshots.
-///
-/// Intentionally synchronous. The Linux backend needs an async netlink client,
-/// but it hides its own runtime rather than forcing `async` on the CLI, the
-/// selection engine and every future SDK binding. macOS and Windows backends
-/// are naturally blocking, so async at this layer would be a tax paid by three
-/// platforms to suit one.
-///
-/// `Send + Sync` because the M5 daemon will share a single provider across
-/// request handlers.
 pub trait NetworkProvider: Send + Sync {
-    /// Capture the machine's current network configuration.
-    ///
-    /// Each call re-queries the kernel; nothing is cached, because the entire
-    /// point of AutoNet is that this changes underneath you.
+    /// Capture the current network configuration.
     ///
     /// # Errors
     ///
@@ -158,7 +91,7 @@ pub trait NetworkProvider: Send + Sync {
     fn platform_name(&self) -> &'static str;
 }
 
-/// Build the backend for the platform this binary was compiled for.
+/// Build the backend for the current platform.
 ///
 /// # Errors
 ///

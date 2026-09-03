@@ -1,97 +1,52 @@
 //! What *sort* of device an interface is, on Windows.
 //!
-//! # Why this module is not inside `windows/`
+//! Outside `windows/` for the same reason [`crate::linktype`] is outside
+//! `macos/`: this is a pure decision over already-gathered evidence, so it is
+//! compiled and tested on Linux too. A misclassification does not crash — it
+//! quietly moves an address hundreds of points up or down — so it needs
+//! exercising somewhere a failure can be debugged.
 //!
-//! The same reason [`crate::linktype`] is not inside `macos/`: everything here
-//! is a pure decision over already-gathered evidence, so keeping it outside the
-//! `#[cfg(target_os = "windows")]` backend means the table below is compiled and
-//! its tests run on the Linux CI job too. A misclassification does not crash —
-//! it quietly moves an address up or down by hundreds of points — so it needs to
-//! be exercised somewhere a failure can be read and debugged, not only on the one
-//! runner nobody in this project can attach to.
-//!
-//! # Does `IfType` alone settle it? No — and not for the reason macOS failed
-//!
-//! Task 1 left this open, and the honest answer needs the two halves separated,
-//! because Windows and macOS fail in opposite places.
-//!
-//! **Wi-Fi versus Ethernet: `IfType` genuinely answers this, and macOS's problem
-//! does not recur.** `linktype`'s whole design — SystemConfiguration first,
-//! `ifi_type` second — exists because Darwin reports `IFT_ETHER` for a Wi-Fi
-//! card: the BSD layer cannot see the radio at all. Windows does not have that
-//! defect. `IF_TYPE_IEEE80211` (71) is what NDIS reports for an 802.11 miniport,
-//! and it is the kernel's own answer, not a vendor string. So the Windows
-//! equivalent of SystemConfiguration — **WlanAPI** — is *not* needed here, and it
-//! is deliberately not enabled: it would add a feature flag and a second DLL to
-//! answer a question `IfType` already answers, and it answers only the Wi-Fi
-//! half while saying nothing about the half below that actually is broken.
-//!
-//! **Ethernet versus a virtual adapter pretending to be Ethernet: `IfType`
-//! cannot answer this, and it is the dangerous half.** A TAP-mode VPN adapter
-//! presents as `IF_TYPE_ETHERNET_CSMACD` — it *is* an Ethernet device, as far as
-//! NDIS is concerned. Hyper-V and WSL switches do the same. On `IfType` alone
-//! every one of them collects `KIND_ETHERNET`'s +250, which is precisely the
-//! failure that let a VPN address outrank a real LAN address on macOS before the
+//! `IfType` settles half the question. Wi-Fi versus Ethernet it genuinely
+//! answers, since `IF_TYPE_IEEE80211` is what NDIS reports for an 802.11
+//! miniport — macOS's problem, where Darwin reports `IFT_ETHER` for a radio,
+//! does not recur, so **WlanAPI is not needed and stays disabled**. What
+//! `IfType` cannot answer is Ethernet versus a virtual adapter *presenting* as
+//! Ethernet: a TAP-mode VPN, a Hyper-V switch and a WSL switch all report
+//! `IF_TYPE_ETHERNET_CSMACD` and would collect `KIND_ETHERNET`'s +250 — the
+//! failure that let a VPN outrank a real LAN address on macOS before the
 //! `IFF_POINTOPOINT` fix.
 //!
-//! # The second source, chosen by comparison rather than by reflex
+//! `GetIfTable2` supplies the rest, in one call for the whole machine, joined by
+//! LUID. `GetIfEntry2` was rejected as the same data N times over, WlanAPI as
+//! answering only the half that already works, and WMI as COM-bound and
+//! string-shaped. `AccessType` is the load-bearing addition:
+//! `NET_IF_ACCESS_POINT_TO_POINT` is the exact `IFF_POINTOPOINT` analogue.
 //!
-//! | Candidate | Cost | What it adds | Verdict |
-//! |---|---|---|---|
-//! | `IfType` alone (free with Task 2) | none | Wi-Fi, loopback, declared tunnels | **necessary, not sufficient** |
-//! | **`GetIfTable2`** | **one call for the whole machine** | `AccessType`, `PhysicalMediumType`, `MediaType`, the `HardwareInterface` bit, `AdminStatus` | **chosen** |
-//! | `GetIfEntry2` per adapter | one call *per adapter* | the same fields | rejected: same data, N times the syscalls |
-//! | WlanAPI (`Win32_NetworkManagement_WiFi`) | new feature, new DLL, handle lifecycle | Wi-Fi confirmation only | rejected: answers the half that already works |
-//! | WMI (`Win32_NetworkAdapter`) | COM, a service dependency, slow | descriptions, `NetEnabled` | rejected: string-shaped, and this backend does not read strings as evidence |
+//! `Description`, `Alias` and the adapter GUID are deliberately not consulted —
+//! matching `"TAP-"` or `"WireGuard"` classifies today's VPNs and misses
+//! tomorrow's. Every input below is a numeric field NDIS filled in.
 //!
-//! `GetIfTable2` wins on a fact worth stating plainly, because an earlier note in
-//! [`crate::windows::adapters`] guessed the opposite: it is **one call for every
-//! interface on the machine**, joined to the adapter list by LUID — not one call
-//! per adapter. That is what makes the `broadcast` and `point_to_point` flags
-//! Task 2 had to leave `false`, and the `up`/`running` distinction it had to
-//! collapse, cheap enough to close here rather than defer.
-//!
-//! `AccessType` is the load-bearing addition: `NET_IF_ACCESS_POINT_TO_POINT` is
-//! the exact analogue of the `IFF_POINTOPOINT` flag that fixed the macOS VPN bug,
-//! and it is a kernel-reported fact rather than an inference from a name.
-//!
-//! # What is deliberately not consulted
-//!
-//! `Description` (`"TAP-Windows Adapter V9"`), `Alias`, and the adapter GUID.
-//! Matching `"TAP-"` or `"WireGuard"` would classify today's VPNs and miss
-//! tomorrow's, and it is the Windows spelling of guessing that `en0` means Wi-Fi.
-//! Every input below is a numeric field NDIS or the TCP/IP stack filled in.
-//!
-//! # Status
-//!
-//! **Table-checked, not hardware-verified.** Every constant is pinned to
-//! windows-sys by a `const` assertion in the backend, and every row of the
-//! decision table is exercised by the tests below. What no test here can
-//! establish is which of these values a *real* VPN, dock or Hyper-V switch
-//! actually reports; that is the Task 7 hardware run, and until then the
-//! mappings from evidence to kind are reasoned, not observed.
+//! **Table-checked, not hardware-verified.** Which values a real VPN, dock or
+//! Hyper-V switch actually reports is unobserved until the hardware run.
 
 use autonet_core::model::InterfaceKind;
 
 use crate::linktype::UNCLASSIFIED;
 
-/// `IFTYPE` values from `ipifcons.h`.
+/// `IFTYPE` values from `ipifcons.h`, mostly IANA registry assignments.
 ///
 /// Restated rather than imported so this module builds on Linux; the `const`
-/// block in [`crate::windows::iftable`] proves each one against windows-sys.
-/// Nearly all are IANA `ifType` registry assignments, which is why they can be
-/// trusted as stable numbers rather than Microsoft's to renumber.
+/// block in [`crate::windows::iftable`] pins each one to windows-sys.
 pub(crate) mod if_type {
     /// Assigned when nothing more specific fits.
     pub(crate) const OTHER: u32 = 1;
-    /// Ethernet — *and every virtual adapter that emulates it*, which is the
-    /// problem this module exists to solve.
+    /// Ethernet — and every virtual adapter that emulates it.
     pub(crate) const ETHERNET_CSMACD: u32 = 6;
     /// Point-to-point protocol.
     pub(crate) const PPP: u32 = 23;
     /// The loopback device.
     pub(crate) const SOFTWARE_LOOPBACK: u32 = 24;
-    /// 802.11. Unlike Darwin's `ifi_type`, this really is reported for Wi-Fi.
+    /// 802.11. Unlike Darwin's `ifi_type`, really is reported for Wi-Fi.
     pub(crate) const IEEE80211: u32 = 71;
     /// An encapsulation tunnel.
     pub(crate) const TUNNEL: u32 = 131;
@@ -145,11 +100,10 @@ pub(crate) mod media {
 
 /// `TUNNEL_TYPE`, the encapsulation a tunnel adapter uses.
 ///
-/// Only the values Microsoft enumerates are treated as evidence. The tempting
-/// shortcut — "anything other than `NONE` is a tunnel" — is rejected on purpose:
-/// it turns an uninitialised or future field value into a −300 penalty on what
-/// might be a real wired NIC, and a false *tunnel* is the more damaging direction
-/// of error, since it demotes the very address AutoNet is meant to find.
+/// Only enumerated values count as evidence. "Anything other than `NONE` is a
+/// tunnel" is rejected on purpose: it turns an uninitialised or future value
+/// into a −300 penalty on a possibly-real NIC, and a false *tunnel* is the
+/// damaging direction — it demotes the address AutoNet exists to find.
 pub(crate) mod tunnel {
     /// Not a tunnel.
     pub(crate) const NONE: i32 = 0;
@@ -169,27 +123,18 @@ pub(crate) mod tunnel {
 
 /// What `kind` says for an Ethernet-typed adapter that is not real hardware.
 ///
-/// Not [`InterfaceKind::Virtual`], which would be the obvious-looking choice and
-/// is wrong: `Virtual` is synthetic, worth **−800**, and on a Hyper-V host the
-/// machine's genuine connectivity runs through exactly such a vEthernet adapter.
-/// Demoting it by 800 points would make AutoNet unusable on the machines where
-/// it is hardest to work out the right address by hand — the opposite of the
-/// point. Not [`InterfaceKind::Ethernet`] either, since collecting +250 is the
-/// bug being fixed.
-///
-/// [`InterfaceKind::Other`] scores **zero**: neither preferred nor penalised.
-/// That is the honest position for "Windows says Ethernet, but nothing is
-/// plugged into it", and it leaves a default route or an `exclude_interfaces`
-/// rule to decide, which is what those exist for.
+/// Deliberately [`InterfaceKind::Other`], which scores zero. Not `Virtual`
+/// (−800): on a Hyper-V host the machine's genuine connectivity runs through
+/// exactly such a vEthernet adapter. Not `Ethernet` (+250) either, since that is
+/// the bug being fixed. Zero leaves the default route or an `exclude_interfaces`
+/// rule to decide.
 pub(crate) const VIRTUAL_ETHERNET: &str = "virtual-ethernet";
 
 /// Everything the second source adds, for one interface.
 ///
-/// Separate from [`Evidence`] and optional inside it because the join can
-/// genuinely miss: an adapter appearing between the `GetAdaptersAddresses` call
-/// and the `GetIfTable2` call is in one list and not the other. When that
-/// happens the table falls back to `IfType` alone rather than inventing values,
-/// and the tests below pin what that degraded answer looks like.
+/// Optional inside [`Evidence`] because the join can miss: an adapter appearing
+/// between the two calls is in one list and not the other. The table then falls
+/// back to `IfType` alone rather than inventing values.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Ndis {
     /// `MIB_IF_ROW2::AccessType`.
@@ -200,17 +145,17 @@ pub(crate) struct Ndis {
     pub media_type: i32,
     /// The `HardwareInterface` bit of `InterfaceAndOperStatusFlags`.
     ///
-    /// `None` when the backend's own consistency check found the bit could not
-    /// be trusted — see [`crate::windows::iftable`]. Distinguishing "the OS says
-    /// this is software" from "we could not read the bit" is what keeps a wrong
-    /// ABI assumption from silently reclassifying every adapter on the machine.
+    /// `None` when the backend's consistency check found it untrustworthy — see
+    /// [`crate::windows::iftable`]. Distinguishing "the OS says software" from
+    /// "the bit could not be read" is what stops a wrong ABI assumption
+    /// reclassifying every adapter at once.
     pub hardware_interface: Option<bool>,
 }
 
 /// Everything known about an interface that bears on what kind it is.
 ///
-/// As with [`crate::linktype::Evidence`], there is no `name` field and no
-/// `description` field, and that is the entire point.
+/// As with [`crate::linktype::Evidence`], there is no `name` or `description`
+/// field, and that is the point.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Evidence {
     /// `IP_ADAPTER_ADDRESSES_LH::IfType`, an `IFTYPE` constant.
@@ -223,20 +168,16 @@ pub(crate) struct Evidence {
 
 /// Decide what kind of device an interface is.
 ///
-/// Sources are consulted most-trustworthy first, and within each step the
-/// cheaper source is checked before the corroborating one:
+/// Sources are consulted most-trustworthy first:
 ///
-/// 1. **Loopback** — a fact the stack states about itself, from any of three
-///    fields; nothing may override it.
-/// 2. **Wi-Fi** — `IF_TYPE_IEEE80211`, corroborated by the NDIS medium for a
-///    driver that presents 802.3 framing over a radio.
-/// 3. **Declared tunnels** — the adapter says it encapsulates.
-/// 4. **Mobile broadband and WiMAX** — real radios AutoNet has no opinion about,
-///    named rather than guessed, and checked before the point-to-point rule so a
+/// 1. **Loopback**, from any of three fields; nothing may override it.
+/// 2. **Wi-Fi**, corroborated by the NDIS medium for a radio presenting 802.3.
+/// 3. **Declared tunnels**.
+/// 4. **Mobile broadband and WiMAX**, before the point-to-point rule so a
 ///    cellular modem is not filed as a VPN.
-/// 5. **The Ethernet family** — where `IfType` stops being enough and
-///    `AccessType` and `HardwareInterface` decide.
-/// 6. **Point-to-point, last** — the catch-all for a tunnel that declared
+/// 5. **The Ethernet family**, where `AccessType` and `HardwareInterface`
+///    decide.
+/// 6. **Point-to-point**, last: the catch-all for a tunnel that declared
 ///    nothing, mirroring `linktype`'s `IFF_POINTOPOINT` fallback.
 pub(crate) fn classify(evidence: Evidence) -> InterfaceKind {
     let ndis = evidence.ndis;
@@ -260,9 +201,8 @@ pub(crate) fn classify(evidence: Evidence) -> InterfaceKind {
         return InterfaceKind::Vpn;
     }
 
-    // Named, not guessed — the same treatment `linktype` gives cellular and
-    // Bluetooth. Both score zero, so the effect is purely on what the user reads
-    // in `autonet interfaces`.
+    // Named, not guessed. Both score zero, so the effect is only on what the
+    // user reads in `autonet interfaces`.
     match evidence.if_type {
         if_type::WWANPP | if_type::WWANPP2 => return InterfaceKind::Other("wwan".to_owned()),
         if_type::IEEE80216_WMAN => return InterfaceKind::Other("wimax".to_owned()),
@@ -271,23 +211,17 @@ pub(crate) fn classify(evidence: Evidence) -> InterfaceKind {
 
     if is_ethernet_family(evidence.if_type) {
         return match ndis {
-            // A point-to-point link that calls itself Ethernet is a tunnel
-            // wearing an Ethernet costume: WireGuard, OpenVPN in TUN mode, and
-            // every L3 VPN that binds a virtual miniport. This is the rule that
-            // stops a VPN address outranking the real LAN address, and it is the
-            // direct analogue of the macOS `IFF_POINTOPOINT` fix.
+            // A point-to-point link calling itself Ethernet is a tunnel in an
+            // Ethernet costume: WireGuard, OpenVPN in TUN mode, any L3 VPN on a
+            // virtual miniport. The direct analogue of the macOS
+            // `IFF_POINTOPOINT` fix.
             Some(n) if n.access_type == access::POINT_TO_POINT => InterfaceKind::Vpn,
-            // Windows says Ethernet and NDIS says no hardware sits behind it:
-            // a Hyper-V or WSL switch, a TAP-mode VPN, a loopback-style test
-            // adapter. See `VIRTUAL_ETHERNET` for why this is neither Ethernet
-            // nor Virtual.
+            // Ethernet by type, no hardware behind it: a Hyper-V or WSL switch,
+            // a TAP-mode VPN. See `VIRTUAL_ETHERNET`.
             Some(n) if n.hardware_interface == Some(false) => {
                 InterfaceKind::Other(VIRTUAL_ETHERNET.to_owned())
             }
-            // Either NDIS confirmed real hardware, or the join missed and
-            // `IfType` is all there is. The second case is a weaker answer than
-            // the first and is recorded as such in the module docs, but Ethernet
-            // remains the best available reading of `IF_TYPE_ETHERNET_CSMACD`.
+            // Real hardware, or the join missed and `IfType` is all there is.
             _ => InterfaceKind::Ethernet,
         };
     }
@@ -301,10 +235,9 @@ pub(crate) fn classify(evidence: Evidence) -> InterfaceKind {
 
 /// Whether NDIS describes a radio.
 ///
-/// Two fields rather than one because they answer at different layers:
-/// `PhysicalMediumType` describes the hardware, `MediaType` the framing the
-/// driver presents. A Wi-Fi card that reports 802.3 framing — the common case,
-/// and the one that fooled macOS — is caught by the first.
+/// Two fields because they answer at different layers: `PhysicalMediumType`
+/// describes the hardware, `MediaType` the framing the driver presents. A Wi-Fi
+/// card reporting 802.3 framing — the common case — is caught by the first.
 fn is_wireless(ndis: Ndis) -> bool {
     ndis.physical_medium == medium::NATIVE_802_11
         || ndis.physical_medium == medium::WIRELESS_LAN
@@ -329,11 +262,9 @@ fn is_declared_tunnel(tunnel_type: i32) -> bool {
 
 /// Whether this `IfType` describes a device that carries Ethernet frames.
 ///
-/// Aggregates resolve here rather than to a variant of their own, matching both
-/// siblings: Linux maps `bond`/`team` to Ethernet and `linktype` maps
-/// `IFT_IEEE8023ADLAG` the same way, on the grounds that an aggregated link is
-/// still the real network path. FireWire joins them for the same reason
-/// `linktype` maps `ScType::FireWire` to Ethernet.
+/// Aggregates resolve here rather than to a variant of their own, matching
+/// Linux's `bond`/`team` and `linktype`'s `IFT_IEEE8023ADLAG`: an aggregated
+/// link is still the real network path. FireWire joins them likewise.
 fn is_ethernet_family(if_type: u32) -> bool {
     matches!(
         if_type,
@@ -385,9 +316,8 @@ mod tests {
 
     #[test]
     fn wifi_is_wireless_from_if_type_alone() {
-        // The half macOS could not do. No second source, no WlanAPI: Windows
-        // reports the radio itself. If this ever regresses, the argument for
-        // leaving `Win32_NetworkManagement_WiFi` disabled goes with it.
+        // The half macOS could not do, from `IfType` alone. If this
+        // regresses, the case for leaving WlanAPI disabled goes with it.
         let kind = classify(Evidence {
             if_type: if_type::IEEE80211,
             ..evidence()
@@ -397,9 +327,8 @@ mod tests {
 
     #[test]
     fn a_radio_presenting_ethernet_framing_is_still_wireless() {
-        // A miniport reporting IF_TYPE_ETHERNET_CSMACD over an 802.11 card.
-        // Without PhysicalMediumType this scores as Ethernet: +250 instead of
-        // +200, and a docked laptop would prefer the wrong link.
+        // A miniport reporting Ethernet over an 802.11 card. Without
+        // PhysicalMediumType it scores +250 instead of +200.
         for physical_medium in [medium::NATIVE_802_11, medium::WIRELESS_LAN] {
             let kind = classify(Evidence {
                 if_type: if_type::ETHERNET_CSMACD,
@@ -415,9 +344,8 @@ mod tests {
 
     #[test]
     fn a_tap_mode_vpn_does_not_collect_the_ethernet_bonus() {
-        // The headline case. OpenVPN in TAP mode is IF_TYPE_ETHERNET_CSMACD with
-        // broadcast access — indistinguishable from a real NIC on IfType alone,
-        // and worth +250 if believed.
+        // OpenVPN in TAP mode: Ethernet-typed with broadcast access,
+        // indistinguishable from a real NIC on `IfType` alone.
         let kind = classify(Evidence {
             if_type: if_type::ETHERNET_CSMACD,
             ndis: Some(software()),
@@ -428,9 +356,8 @@ mod tests {
 
     #[test]
     fn a_tun_mode_vpn_is_penalised_as_a_tunnel() {
-        // WireGuard and OpenVPN in TUN mode: Ethernet-typed, but point-to-point.
-        // AccessType is the IFF_POINTOPOINT analogue, and it outranks the
-        // hardware bit precisely so this lands on Vpn rather than Other.
+        // WireGuard and OpenVPN in TUN mode. `AccessType` outranks the
+        // hardware bit so this lands on Vpn rather than Other.
         let kind = classify(Evidence {
             if_type: if_type::ETHERNET_CSMACD,
             ndis: Some(Ndis {
@@ -444,8 +371,7 @@ mod tests {
 
     #[test]
     fn a_real_nic_keeps_its_ethernet_bonus() {
-        // The other direction of the same rule: none of the VPN detection above
-        // may cost a plain wired port its +250.
+        // No VPN rule above may cost a plain wired port its +250.
         for if_type in [
             if_type::ETHERNET_CSMACD,
             if_type::IEEE8023AD_LAG,
@@ -462,8 +388,7 @@ mod tests {
 
     #[test]
     fn loopback_is_decided_before_anything_else_is_consulted() {
-        // Three independent statements of the same fact; any one settles it, and
-        // no other evidence may override it.
+        // Any one of the three settles it; nothing may override it.
         for evidence in [
             Evidence {
                 if_type: if_type::SOFTWARE_LOOPBACK,
@@ -519,9 +444,8 @@ mod tests {
 
     #[test]
     fn an_unenumerated_tunnel_type_is_not_treated_as_a_tunnel() {
-        // The reason `is_declared_tunnel` is an allow-list. A driver that leaves
-        // TunnelType uninitialised, or a value Microsoft adds later, must not
-        // cost a real wired NIC 300 points and 550 relative to Ethernet.
+        // Why `is_declared_tunnel` is an allow-list: an uninitialised or
+        // future value must not cost a real NIC 550 points against Ethernet.
         for tunnel_type in [3, 7, 99, -1, i32::MAX] {
             let kind = classify(Evidence {
                 if_type: if_type::ETHERNET_CSMACD,
@@ -534,9 +458,8 @@ mod tests {
 
     #[test]
     fn a_cellular_modem_is_named_rather_than_filed_as_a_vpn() {
-        // Mobile broadband is point-to-point, so the last-resort rule would call
-        // it a VPN and dock it 300 points. It is a real uplink; checking the
-        // WWAN types first is what keeps that from happening.
+        // Mobile broadband is point-to-point, so the last-resort rule would
+        // dock a real uplink 300 points. The WWAN check must come first.
         for if_type in [if_type::WWANPP, if_type::WWANPP2] {
             let kind = classify(Evidence {
                 if_type,
@@ -558,9 +481,8 @@ mod tests {
 
     #[test]
     fn an_undeclared_point_to_point_link_is_a_tunnel() {
-        // The `linktype` fallback, restated: a device no source named, with one
-        // peer at the far end. Wintun presents this way if it does not report
-        // IF_TYPE_TUNNEL.
+        // A device no source named, with one peer at the far end — how
+        // Wintun presents when it does not report IF_TYPE_TUNNEL.
         let kind = classify(Evidence {
             ndis: Some(Ndis {
                 access_type: access::POINT_TO_POINT,
@@ -573,8 +495,8 @@ mod tests {
 
     #[test]
     fn a_device_no_source_recognises_is_reported_as_unknown() {
-        // Not Ethernet. `Other` scores zero, which is the honest position when
-        // AutoNet genuinely does not know — the same rule `linktype` follows.
+        // Not Ethernet: `Other` scores zero, the honest position for a
+        // device AutoNet does not recognise.
         assert_eq!(
             classify(evidence()),
             InterfaceKind::Other(UNCLASSIFIED.to_owned())
@@ -596,10 +518,8 @@ mod tests {
 
     #[test]
     fn a_missed_join_degrades_to_if_type_rather_than_guessing() {
-        // An adapter added between the two calls is in one list and not the
-        // other. `IfType` still answers the questions it can answer; only the
-        // virtual-Ethernet distinction is lost, and it is lost in the direction
-        // Task 2 already shipped rather than in a new one.
+        // An adapter added between the two calls is in one list only. Just
+        // the virtual-Ethernet distinction is lost.
         assert_eq!(
             classify(Evidence {
                 if_type: if_type::ETHERNET_CSMACD,
@@ -625,10 +545,8 @@ mod tests {
 
     #[test]
     fn an_untrustworthy_hardware_bit_does_not_reclassify_the_machine() {
-        // `hardware_interface: None` is the backend saying its consistency check
-        // failed. That must fall back to Ethernet — the Task 2 behaviour —
-        // rather than to `virtual-ethernet`, which would strip +250 from every
-        // real NIC on the machine at once.
+        // `None` means the consistency check failed. Falling back to
+        // `virtual-ethernet` would strip +250 from every real NIC at once.
         let kind = classify(Evidence {
             if_type: if_type::ETHERNET_CSMACD,
             ndis: Some(Ndis {

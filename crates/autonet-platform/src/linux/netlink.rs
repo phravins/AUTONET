@@ -1,16 +1,12 @@
 //! Three netlink dumps — links, addresses, routes — joined into one snapshot.
 //!
-//! The kernel models these as separate tables keyed by interface index, and
-//! this module reproduces that join rather than flattening it. Routes in
-//! particular are kept as first-class records: "does this interface own a
-//! default route?" is the single strongest evidence that an interface can
-//! actually reach anything, and it is invisible to any address-only API such
-//! as `getifaddrs`.
+//! Routes are kept as first-class records: "does this interface own a default
+//! route?" is the strongest evidence that it can reach anything, and it is
+//! invisible to any address-only API such as `getifaddrs`.
 //!
-//! Everything here is translation. No filtering, no preference, no scoring —
-//! judging which address a peer should use is `autonet-core`'s job, and mixing
-//! the two would put policy behind an `#[cfg(target_os)]` where it could not be
-//! tested from fixtures.
+//! Everything here is translation — no filtering, preference or scoring. That
+//! is `autonet-core`'s job, and mixing the two would put policy behind an
+//! `#[cfg(target_os)]` where fixtures could not test it.
 
 use std::collections::BTreeMap;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
@@ -38,8 +34,8 @@ pub(crate) async fn snapshot() -> Result<NetworkState, PlatformError> {
         .map_err(|e| PlatformError::query("open a netlink socket", e))?;
 
     // The connection future drives the socket; the handle is useless until it
-    // is running. It is aborted below rather than left to leak, because the
-    // daemon will call `snapshot` repeatedly over a long-lived process.
+    // is running. Aborted below rather than leaked, because the daemon will
+    // call `snapshot` repeatedly over a long-lived process.
     let pump = tokio::spawn(connection);
     let result = collect(&handle).await;
     drop(handle);
@@ -64,10 +60,9 @@ async fn collect(handle: &Handle) -> Result<NetworkState, PlatformError> {
 
 /// Dump every link, keyed by interface index.
 ///
-/// A `BTreeMap` rather than a `HashMap`: it keeps interfaces in index order for
-/// free, which makes `autonet interfaces` output stable between runs and makes
-/// the selection engine's index-ascending tie-break deterministic in practice
-/// as well as in principle.
+/// A `BTreeMap` keeps interfaces in index order for free, which makes
+/// `autonet interfaces` stable between runs and the selector's index-ascending
+/// tie-break deterministic in practice as well as in principle.
 async fn dump_links(handle: &Handle) -> Result<BTreeMap<u32, Interface>, PlatformError> {
     let mut stream = handle.link().get().execute();
     let mut interfaces = BTreeMap::new();
@@ -144,11 +139,9 @@ fn interface_from(message: &LinkMessage) -> Option<Interface> {
 
 /// Map the kernel's `IF_OPER_*` value onto AutoNet's coarser state.
 ///
-/// `Unknown` is preserved rather than being resolved to up or down, because it
-/// is what tunnel devices report while working perfectly: WireGuard, `tun`, and
-/// loopback never set an operational state at all. The selection engine treats
-/// only `Down` as disqualifying for exactly this reason — guessing here would
-/// make `autonet ip --interface wg0` fail on a healthy tunnel.
+/// `Unknown` is preserved rather than resolved: it is what WireGuard, `tun` and
+/// loopback report while working perfectly. Only `Down` is disqualifying, so
+/// guessing here would fail `--interface wg0` on a healthy tunnel.
 fn interface_state(oper_state: Option<State>, flags: LinkFlags) -> InterfaceState {
     match oper_state {
         Some(State::Up) => InterfaceState::Up,
@@ -176,10 +169,8 @@ async fn attach_addresses(
         .await
         .map_err(|e| PlatformError::query("list IP addresses", e))?
     {
-        // An address whose interface did not appear in the link dump belongs to
-        // a device that vanished between the two queries. Dropping it is
-        // correct: reporting an address with no interface would hand the caller
-        // something it cannot name or bind to.
+        // The device vanished between the two queries. Reporting an address
+        // with no interface would hand the caller something it cannot bind to.
         if let Some(interface) = interfaces.get_mut(&message.header.index) {
             if let Some(address) = address_from(&message) {
                 interface.addresses.push(address);
@@ -225,10 +216,9 @@ fn address_from(message: &AddressMessage) -> Option<Address> {
         return None;
     }
 
-    // `IFA_F_TEMPORARY` and `IFA_F_SECONDARY` are the same bit. On IPv6 it
-    // means a privacy-extension address, which is rotated out from under
-    // whoever you gave it to; on IPv4 it just means a second address on the
-    // interface, which is perfectly stable. Hence the family check.
+    // `IFA_F_TEMPORARY` and `IFA_F_SECONDARY` are the same bit: on IPv6 a
+    // rotating privacy-extension address, on IPv4 a perfectly stable second
+    // address. Hence the family check.
     let is_temporary = ip.is_ipv6() && has(AddressFlags::Secondary, AddressHeaderFlags::Secondary);
 
     let mut result = Address::new(ip, message.header.prefix_len);
@@ -303,9 +293,8 @@ fn route_from(message: &RouteMessage) -> Option<Route> {
             RouteAttribute::Oif(index) => interface_index = Some(*index),
             RouteAttribute::Priority(value) => metric = *value,
             // A multipath route carries its interfaces in nexthop records
-            // instead of `RTA_OIF`. Taking the first is enough for AutoNet's
-            // purposes: the question being asked is only ever "does this
-            // interface have a route out", not which hop a packet takes.
+            // instead of `RTA_OIF`. The first is enough: the question is only
+            // ever "does this interface have a route out".
             RouteAttribute::MultiPath(hops) if interface_index.is_none() => {
                 interface_index = hops.first().map(|hop| hop.interface_index);
             }
@@ -315,10 +304,9 @@ fn route_from(message: &RouteMessage) -> Option<Route> {
 
     let interface_index = interface_index?;
 
-    // A missing `RTA_DST` means a default route — but only when the prefix
-    // length agrees. Anything else is a route we cannot describe, and inventing
-    // `None` for it would make `is_default()` claim a default route that does
-    // not exist.
+    // A missing `RTA_DST` means a default route, but only when the prefix
+    // length agrees. Inventing `None` otherwise would make `is_default()` claim
+    // a default route that does not exist.
     let destination = match destination {
         Some(ip) => Some(IpNetwork::new(ip, message.header.destination_prefix_length)),
         None if message.header.destination_prefix_length == 0 => None,

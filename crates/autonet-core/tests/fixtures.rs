@@ -1,13 +1,4 @@
-//! Fixture-driven tests for the selection engine.
-//!
-//! Every scenario here is a JSON snapshot in `tests/fixtures/` at the repository
-//! root. Nothing in this file touches the operating system, which is the point:
-//! switching Wi-Fi networks while the suite runs must not change a single
-//! result. Live checks belong in the platform crate, behind `#[ignore]`.
-//!
-//! Fixtures state each address's `scope` explicitly rather than deriving it.
-//! That keeps the two concerns separate — `classify.rs` unit tests decide what
-//! `172.17.0.1` *is*, and these decide what the engine *does* with it.
+//! Fixture-driven selection tests.
 
 use std::path::PathBuf;
 
@@ -15,20 +6,12 @@ use autonet_core::config::SelectionConfig;
 use autonet_core::model::{FamilyPreference, NetworkState};
 use autonet_core::select::{select, select_address, Disqualification};
 
-/// Where the fixtures live, and where their provenance is documented.
-///
-/// See `tests/fixtures/README.md`: the files there are not equally strong
-/// evidence, and which ones are hand-built versus captured from a real machine
-/// is recorded beside them rather than inferred from their names.
+/// Return the fixture directory.
 fn fixtures_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures")
 }
 
-/// Every fixture stem in the directory, sorted for a deterministic order.
-///
-/// Enumerated rather than listed, so a fixture added later cannot quietly
-/// escape the whole-corpus checks below by not being named in an array someone
-/// forgot to update.
+/// Return fixture names in a stable order.
 fn fixture_names() -> Vec<String> {
     let dir = fixtures_dir();
     let mut names: Vec<String> = std::fs::read_dir(&dir)

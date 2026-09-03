@@ -1,36 +1,17 @@
 //! Reading BSD routing-socket messages, byte by byte.
 //!
-//! # Why this module is not inside `macos/`
-//!
-//! The same reason [`crate::linktype`] is not: everything here is a pure
-//! decision over bytes, so keeping it outside the `#[cfg(target_os = "macos")]`
-//! backend means its tests compile and run on the Linux CI job as well. That
-//! matters more here than anywhere else in the crate — sockaddr alignment and
+//! Kept outside `macos/` so its tests run on Linux too: sockaddr alignment and
 //! netmask truncation are the classic ways a routing-socket parser goes
-//! *subtly* wrong, producing plausible-looking addresses rather than an error,
-//! and a test that only runs on a machine none of the maintainers can debug on
-//! is not much of a test.
+//! *subtly* wrong, producing plausible addresses rather than an error.
 //!
-//! # Why bytes rather than `libc` structs
+//! Bytes rather than `libc` structs, because a BSD `sockaddr` begins with a
+//! `sa_len` byte that Linux's does not have and `AF_INET6` is 30 on Darwin
+//! against 10 on Linux — the types could not be shared even in principle. Every
+//! constant and offset below is pinned to `libc`'s Darwin definitions by a
+//! `const` assertion, so a moved field fails the build rather than quietly
+//! returning wrong addresses.
 //!
-//! This is not merely a convenience. A BSD `sockaddr` begins with a `sa_len`
-//! byte that Linux's does not have, and `AF_INET6` is 30 on Darwin against 10 on
-//! Linux, so `libc`'s types could not be shared across the two platforms even in
-//! principle. Working from raw bytes with Darwin's constants stated explicitly
-//! is both portable and closer to what the kernel actually wrote.
-//!
-//! Nothing is taken on trust, though: every constant and offset below is pinned
-//! against `libc`'s own Darwin definitions by a `const` assertion that runs
-//! under `cargo check --target *-apple-darwin`. If Apple ever moved a field, the
-//! build fails rather than the parser quietly returning wrong addresses.
-//!
-//! # Status
-//!
-//! **Verified against headers and the compiler, not against a live routing
-//! table.** The struct sizes, field offsets and address-family numbers below are
-//! compiler-checked facts. That a real `NET_RT_DUMP` buffer is laid out the way
-//! the tests here assume is read from `route.h`, and is confirmed only by
-//! running against a Mac.
+//! **Verified against headers and the compiler, not a live routing table.**
 
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
@@ -103,11 +84,9 @@ mod rtf {
 
 /// Byte offsets into `struct rt_msghdr`, and its total size.
 ///
-/// The sockaddrs of a message begin immediately after the header, so [`LEN`]
-/// being right is what makes every address in every message land in the right
-/// place. It is 92 on both `aarch64-apple-darwin` and `x86_64-apple-darwin` —
-/// `rt_metrics` is fourteen 32-bit fields, so nothing here depends on pointer
-/// width.
+/// The sockaddrs begin immediately after the header, so [`LEN`] being right is
+/// what puts every address at the right offset. It is 92 on both Darwin targets:
+/// `rt_metrics` is fourteen 32-bit fields, so nothing depends on pointer width.
 ///
 /// [`LEN`]: header::LEN
 mod header {
@@ -130,10 +109,9 @@ mod header {
 /// `RTM_VERSION` — the routing-message ABI this parser understands.
 pub(crate) const RTM_VERSION: u8 = 5;
 
-// Everything above is restated from Apple's headers so that this module builds
-// on Linux. On macOS it is checked against `libc`, at compile time, so a wrong
-// number fails the build instead of producing wrong routes. `cargo check
-// --target aarch64-apple-darwin` is enough to run this.
+// Everything above is restated from Apple's headers so this module builds on
+// Linux. On macOS it is checked against `libc` at compile time, so a wrong
+// number fails the build instead of producing wrong routes.
 #[cfg(target_os = "macos")]
 const _: () = {
     assert!(af::INET == libc::AF_INET);
@@ -301,18 +279,14 @@ fn sdl_index(sa: &[u8]) -> Option<u32> {
 
 /// Undo the KAME scope-id embedding in a link-local IPv6 address.
 ///
-/// BSD kernels, macOS among them, store the interface index *inside* the
-/// address — octets 2 and 3 of an `fe80::/10` address — as well as in
-/// `sin6_scope_id`. Both `getifaddrs` and the routing socket return that raw
-/// form, so the link-local gateway on interface 5 arrives looking like
-/// `fe80:5::1`. RFC 4291 requires those octets to be zero in a real link-local
-/// address, so clearing them repairs a known kernel quirk rather than guessing,
-/// and it is a no-op on any address that does not carry it.
+/// BSD kernels store the interface index *inside* the address — octets 2 and 3
+/// of an `fe80::/10` address — so the link-local gateway on interface 5 arrives
+/// as `fe80:5::1`. RFC 4291 requires those octets to be zero, so clearing them
+/// repairs a known quirk rather than guessing, and is a no-op otherwise.
 ///
-/// Applied to routes as well as addresses because a v6 default route's gateway
-/// is almost always link-local, and Linux's netlink reports the clean form —
-/// leaving the embedding in would make the two platforms disagree about the
-/// gateway of an otherwise identical network.
+/// Applied to routes as well as addresses: a v6 default gateway is almost always
+/// link-local, and netlink reports the clean form, so leaving the embedding in
+/// would make the two platforms disagree about the same gateway.
 pub(crate) fn strip_embedded_scope_id(ip: Ipv6Addr) -> Ipv6Addr {
     let mut octets = ip.octets();
     if octets[0] == 0xfe && octets[1] & 0xc0 == 0x80 {
@@ -326,9 +300,8 @@ pub(crate) fn strip_embedded_scope_id(ip: Ipv6Addr) -> Ipv6Addr {
 ///
 /// **The netmask is the sockaddr most likely to be truncated.** The kernel
 /// writes only as many bytes as it needs, so `sa_len` is 0 for a default route
-/// and can be well short of `sizeof(sockaddr_in)` for anything else. Casting the
-/// slot to a `sockaddr_in` and reading `sin_addr` would read past the end of it;
-/// the bytes that are absent are simply zero, so they are treated as zero here.
+/// and can fall well short of `sizeof(sockaddr_in)` otherwise. Absent bytes are
+/// simply zero and are treated as zero here.
 ///
 /// The family is taken from the *destination*, never from the mask. A netmask
 /// sockaddr's `sa_family` field is frequently left as zero, so trusting it would
@@ -382,10 +355,9 @@ pub(crate) struct Message {
 
 /// Read the header of the message at the front of `bytes`.
 ///
-/// `None` when the buffer is too short to hold a header, or when `rtm_msglen`
-/// is inconsistent with it. Both are refusals rather than best guesses: a
-/// `msglen` that is too small would make the caller's walk loop forever, and one
-/// that overruns the buffer would read another message's bytes as sockaddrs.
+/// `None` when the buffer is too short for a header, or when `rtm_msglen` is
+/// inconsistent with it: too small would make the caller's walk loop forever,
+/// too large would read another message's bytes as sockaddrs.
 pub(crate) fn message(bytes: &[u8]) -> Option<Message> {
     let field = |at: usize, len: usize| bytes.get(at..at + len);
     let two =
@@ -420,20 +392,17 @@ pub(crate) fn address_block<'a>(bytes: &'a [u8], message: &Message) -> Option<&'
 /// Whether a route says anything about reaching another machine.
 ///
 /// The macOS counterpart of the Linux backend dropping everything that is not
-/// `RouteType::Unicast`. The routing table is mostly entries describing how the
-/// kernel talks to itself or to its own neighbours:
+/// `RouteType::Unicast`:
 ///
 /// - `RTF_LLINFO` and `RTF_WASCLONED` are ARP and neighbour-discovery cache
-///   entries, which on a busy network outnumber the real routes many times over.
+///   entries, which outnumber the real routes many times over.
 /// - `RTF_MULTICAST` routes are not a path to a peer.
-/// - `RTF_BLACKHOLE` and `RTF_REJECT` routes exist precisely to *not* carry
-///   traffic, so reporting one as evidence of reachability would be backwards.
+/// - `RTF_BLACKHOLE` and `RTF_REJECT` exist precisely to *not* carry traffic.
 ///
-/// `RTF_IFSCOPE` is deliberately absent from that list. macOS adds a scoped
-/// default route per interface when several are up at once, and those are real:
-/// dropping them would leave a perfectly usable secondary link looking like it
-/// had no default route at all, a harsher penalty than Linux applies to a second
-/// default route. Which one wins is settled by the metric, not by hiding one.
+/// `RTF_IFSCOPE` is deliberately absent. macOS adds a scoped default route per
+/// interface when several are up, and those are real: dropping them would leave
+/// a usable secondary link looking like it had no default route. Which one wins
+/// is settled by the metric, not by hiding one.
 pub(crate) fn is_reportable(flags: i32) -> bool {
     let unusable = rtf::LLINFO | rtf::WASCLONED | rtf::MULTICAST | rtf::BLACKHOLE | rtf::REJECT;
     flags & rtf::UP != 0 && flags & unusable == 0
@@ -516,19 +485,14 @@ pub(crate) fn route_parts(block: &[u8], message: &Message, fallback: Family) -> 
 /// per call, so it is known, and it stands in when a message's destination
 /// sockaddr is too short to declare a family of its own.
 ///
-/// The walk stops at the first message it cannot make sense of. That is
-/// deliberate: `rtm_msglen` is what locates the *next* message, so once one
-/// header is untrustworthy every byte after it is too, and continuing would be
-/// reading arbitrary bytes as addresses. Individual messages that parse but are
-/// not routes are skipped without ending the walk.
+/// The walk stops at the first message it cannot make sense of: `rtm_msglen`
+/// locates the *next* message, so past a bad header nothing is trustworthy.
+/// Messages that parse but are not routes are skipped without ending the walk.
 ///
 /// `metrics` supplies the metric per interface index. macOS has no per-route
-/// metric — `rmx_hopcount` is not one and reads 0 on Darwin — so there is
-/// nothing in these bytes to read it from and it has to be supplied from
-/// outside; [`crate::servicerank`] derives it from the network service order.
-/// A route naming an interface the map does not cover takes
-/// [`servicerank::UNRANKED`], which is the same answer an interface absent from
-/// the service order gets: no preference expressed, never a silent win.
+/// metric — `rmx_hopcount` is not one and reads 0 on Darwin — so it comes from
+/// [`crate::servicerank`] instead. A route naming an interface the map does not
+/// cover takes [`servicerank::UNRANKED`]: no preference expressed, never a win.
 pub(crate) fn routes(buffer: &[u8], family: Family, metrics: &HashMap<u32, u32>) -> Vec<Route> {
     let mut found = Vec::new();
     let mut rest = buffer;
@@ -550,19 +514,13 @@ pub(crate) fn routes(buffer: &[u8], family: Family, metrics: &HashMap<u32, u32>)
             continue;
         };
 
-        // `rtm_index` is authoritative: the kernel fills it on every message,
-        // whereas `RTA_IFP` is optional. It is the same ifindex namespace
-        // `sdl_index` gave the interface walk, so this is a numeric join with
-        // no name matching anywhere.
-        //
-        // `RTA_IFP` is the fallback only for a message that names no interface
-        // at all — which should not happen in a table dump, and where zero
-        // would otherwise mean "interface 0", a device that does not exist. If
-        // the two ever *disagree*, that is a sockaddr walk gone wrong rather
-        // than a routing fact. That comparison is not observable from outside
-        // this crate, because `Route` carries one index and the other is
-        // dropped here; `macos::route`'s ignored `rtm_index_and_rta_ifp_name_
-        // the_same_interface` test is where it is checked against a live table.
+        // `rtm_index` is authoritative — the kernel fills it on every message,
+        // `RTA_IFP` is optional — and is the same ifindex namespace the
+        // interface walk used, so this is a numeric join with no name matching.
+        // `RTA_IFP` is the fallback only for a message naming no interface at
+        // all, where zero would mean "interface 0", a device that does not
+        // exist. `macos::route`'s ignored `rtm_index_and_rta_ifp_name_the_same_
+        // interface` test checks the two against a live table.
         let interface_index = match head.index {
             0 => parts.interface.unwrap_or(0),
             index => index,
@@ -1136,11 +1094,9 @@ mod tests {
 
     #[test]
     fn a_route_on_an_interface_the_map_does_not_cover_is_unranked() {
-        // Should not happen — the map is built from the same snapshot's
-        // interfaces — but a route naming an unknown interface must take the
-        // worst metric rather than the best. Defaulting to zero here would
-        // make a route AutoNet cannot even resolve to an interface outrank
-        // every real one.
+        // A route naming an unknown interface must take the worst metric, not
+        // the best: defaulting to zero would let a route AutoNet cannot resolve
+        // to an interface outrank every real one.
         let found = routes(&a_dump(), Family::V4, &no_metrics());
         assert!(found
             .iter()

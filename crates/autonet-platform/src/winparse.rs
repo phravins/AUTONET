@@ -1,41 +1,19 @@
 //! Decoding the scalar values the Windows IP Helper API returns.
 //!
-//! # Why this module is not inside `windows/`
+//! Kept outside `windows/` for the reason [`crate::rtparse`] is kept outside
+//! `macos/`: it is pure, so its tests run on the Linux job. That matters most
+//! for [`sockaddr_ip`], where a wrong offset yields a *plausible* address rather
+//! than an error.
 //!
-//! The same reason [`crate::rtparse`] is not inside `macos/`: everything here is
-//! a pure decision over bytes and integers, so keeping it outside the
-//! `#[cfg(target_os = "windows")]` backend means its tests compile and run on
-//! the Linux CI job too. That matters most for [`sockaddr_ip`] — a wrong field
-//! offset yields a *plausible* address rather than an error, and a test that can
-//! only run on a Windows runner none of the maintainers can attach a debugger to
-//! is not much of a test.
-//!
-//! # Why bytes rather than windows-sys structs
-//!
-//! `SOCKET_ADDRESS` hands over a `*mut SOCKADDR` and a length, and which
-//! concrete type sits behind that pointer is decided by the two bytes at its
-//! front. windows-sys declares no `sockaddr_in` or `sockaddr_in6` that could be
-//! cast to, and importing one if it did would tie this module to the very target
-//! it is deliberately built away from. Working from raw bytes with the layouts
-//! stated explicitly is both portable and closer to what the kernel wrote.
-//!
-//! Note what is *absent* from those layouts: a Windows `sockaddr` begins
-//! directly with a two-byte `sa_family`, where the BSD one [`crate::rtparse`]
-//! reads begins with a `sa_len` byte. The two parsers cannot share code, and
-//! `AF_INET6` is 23 here against 30 on Darwin and 10 on Linux, so nothing here
-//! may be assumed from either sibling.
-//!
-//! Nothing is taken on trust: every constant below is pinned to windows-sys's
-//! own definition by a `const` assertion in the backend, which runs under
-//! `cargo check --target *-pc-windows-msvc`. If Microsoft renumbered one, the
-//! build fails rather than the parser quietly misreading a status.
-//!
-//! # Status
+//! Bytes rather than windows-sys structs, because `SOCKET_ADDRESS` hands over a
+//! `*mut SOCKADDR` whose concrete type is decided by the two bytes at its front,
+//! and windows-sys declares no `sockaddr_in` to cast to. A Windows `sockaddr`
+//! begins directly with a two-byte `sa_family` where the BSD one begins with
+//! `sa_len`, and `AF_INET6` is 23 here against 30 on Darwin and 10 on Linux, so
+//! nothing may be assumed from either sibling. Every constant below is pinned to
+//! windows-sys's own definition by a `const` assertion in the backend.
 //!
 //! **Verified against headers and the compiler, not against a live machine.**
-//! The layouts below are read from `ws2def.h` and `ws2ipdef.h` and exercised by
-//! hand-built buffers. That a real `GetAdaptersAddresses` buffer is laid out the
-//! way these tests assume is confirmed only by running on Windows.
 
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
@@ -86,11 +64,8 @@ mod layout {
 
 /// The IP address inside a `sockaddr`, or `None` if the bytes cannot hold one.
 ///
-/// The bounds checks are the point. Windows tells us how many bytes it wrote
-/// through `SOCKET_ADDRESS::iSockaddrLength`, and a buffer shorter than the
-/// family it claims is either a truncated read or a family this function does
-/// not know — both of which must produce nothing rather than an address built
-/// from whatever happened to follow in memory.
+/// The bounds checks are the point: a buffer shorter than the family it claims
+/// must produce nothing, not an address built from whatever followed in memory.
 pub(crate) fn sockaddr_ip(bytes: &[u8]) -> Option<IpAddr> {
     let family: [u8; 2] = bytes
         .get(layout::FAMILY..layout::FAMILY + 2)?
@@ -118,16 +93,12 @@ pub(crate) fn sockaddr_ip(bytes: &[u8]) -> Option<IpAddr> {
 
 /// What `OperStatus` means in the model's vocabulary.
 ///
-/// Deliberately identical to the Linux backend's mapping of `IF_OPER_*`
-/// (`linux/netlink.rs`), because it is the same RFC 2863 enumeration: a
-/// `LowerLayerDown` adapter is down for AutoNet's purposes on both systems, and
-/// two backends disagreeing about that would be a silent behaviour difference
-/// rather than a visible one.
+/// Identical to the Linux backend's mapping of `IF_OPER_*` — the same RFC 2863
+/// enumeration — so the two cannot disagree silently.
 ///
-/// Anything unrecognised becomes [`InterfaceState::Unknown`] rather than
-/// `Down` — `Unknown` still lets the selector consider an interface, and
-/// guessing `Down` would silently hide a working link if Microsoft ever adds a
-/// state.
+/// Anything unrecognised becomes [`InterfaceState::Unknown`] rather than `Down`:
+/// `Unknown` still lets the selector consider an interface, where guessing
+/// `Down` would hide a working link if Microsoft adds a state.
 pub(crate) fn interface_state(status: i32) -> InterfaceState {
     match status {
         oper::UP => InterfaceState::Up,
@@ -139,11 +110,9 @@ pub(crate) fn interface_state(status: i32) -> InterfaceState {
 
 /// A UTF-16 string from Windows, rendered lossily and truncated at its NUL.
 ///
-/// Lossy rather than fallible: an adapter whose friendly name contains an
-/// unpaired surrogate is still an adapter, and dropping it would be a stranger
-/// outcome than a replacement character in a name. The NUL scan is repeated here
-/// even though the caller only passes the units before the terminator, so that
-/// the truncation rule is testable off Windows.
+/// Lossy rather than fallible: an adapter whose name contains an unpaired
+/// surrogate is still an adapter. The NUL scan is repeated here, though the
+/// caller passes only the units before the terminator, so it is testable.
 pub(crate) fn wide_to_string(units: &[u16]) -> String {
     let end = units.iter().position(|u| *u == 0).unwrap_or(units.len());
     String::from_utf16_lossy(&units[..end])
@@ -151,11 +120,10 @@ pub(crate) fn wide_to_string(units: &[u16]) -> String {
 
 /// A prefix length clamped to what its family can actually have.
 ///
-/// `OnLinkPrefixLength` is a `u8`, and tunnel adapters have been observed
-/// reporting `255`. An out-of-range prefix would otherwise flow straight into
-/// the JSON contract and out to an SDK. Clamping to the host length is the
-/// conservative reading: a `/32` claims nothing about the surrounding network,
-/// where a `/255` claims something impossible.
+/// `OnLinkPrefixLength` is a `u8` and tunnel adapters have been observed
+/// reporting `255`, which would otherwise flow into the JSON contract. Clamping
+/// to the host length is the conservative reading: a `/32` claims nothing about
+/// the surrounding network, where a `/255` claims something impossible.
 pub(crate) fn prefix_len(raw: u8, ip: &IpAddr) -> u8 {
     let max = if ip.is_ipv4() { 32 } else { 128 };
     raw.min(max)
@@ -210,9 +178,8 @@ mod tests {
 
     #[test]
     fn a_link_local_address_ignores_its_scope_id() {
-        // The model has nowhere to put a scope id, and `fe80::1%12` is not a
-        // value `IpAddr` can hold. Dropping it is a real limitation, recorded
-        // here so it is a decision rather than an oversight.
+        // The model has nowhere to put a scope id and `IpAddr` cannot hold
+        // `fe80::1%12`. Dropping it is a real limitation, recorded as such.
         let octets = [0xfe, 0x80, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x01];
         assert_eq!(
             sockaddr_ip(&sockaddr_in6(octets, 12)),

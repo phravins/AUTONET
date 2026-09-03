@@ -4,16 +4,15 @@ use thiserror::Error;
 
 /// Errors produced by the core model, configuration, and selection engine.
 ///
-/// The core performs no I/O against the operating system, so these errors are
-/// always about *data* — malformed configuration, an unparsable value, or a
-/// network state in which no address can legitimately be selected.
+/// The core performs no I/O against the operating system, so these are always
+/// about *data*: malformed configuration, an unparsable value, or a network
+/// state in which no address can legitimately be selected.
 #[derive(Debug, Error)]
 pub enum CoreError {
     /// No address survived the selection engine's filters.
     ///
-    /// This is a normal, expected outcome (an unplugged laptop, or a machine
-    /// with nothing but loopback), which is why it carries a human-readable
-    /// explanation rather than being a panic.
+    /// A normal, expected outcome — an unplugged laptop, or a machine with
+    /// nothing but loopback — hence a human-readable explanation.
     #[error("no usable address found: {reason}")]
     NoAddressFound {
         /// Why nothing was selectable, phrased for a developer reading a terminal.

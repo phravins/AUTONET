@@ -1,12 +1,4 @@
-//! Configuration for the selection engine.
-//!
-//! Precedence, lowest to highest: **built-in defaults → config file →
-//! `AUTONET_*` environment variables → CLI flags**. The CLI applies the last
-//! layer itself; everything below it lives here.
-//!
-//! This module is the one place in the core that touches the filesystem, and
-//! only to read a TOML file. The "core performs no OS calls" rule is about
-//! *network* state: the engine must never discover an interface on its own.
+//! Selection configuration and its file/environment loaders.
 
 use std::path::{Path, PathBuf};
 
@@ -25,21 +17,14 @@ pub struct Config {
     pub output: OutputConfig,
 }
 
-/// Rules governing which address wins.
-///
-/// The booleans are independent opt-ins that map one-to-one onto TOML keys and
-/// `--flags`; folding them into an enum would make the config file harder to
-/// read and stop callers from combining them.
+/// Rules governing address selection.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 #[allow(clippy::struct_excessive_bools)]
 pub struct SelectionConfig {
     /// Which address family to favour. Defaults to IPv4.
     pub prefer_family: FamilyPreference,
-    /// Allow `127.0.0.1` / `::1` to be selected.
-    ///
-    /// Off by default: a loopback address is exactly the answer AutoNet exists
-    /// to avoid giving, because no other device can reach it.
+    /// Allow loopback addresses.
     pub allow_loopback: bool,
     /// Allow `169.254.0.0/16` / `fe80::/10` to be selected. Off by default —
     /// link-local addresses are not usefully routable.

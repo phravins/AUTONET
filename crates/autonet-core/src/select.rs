@@ -1,29 +1,4 @@
-//! The address selection engine.
-//!
-//! A developer machine has many addresses at once — Wi-Fi, Ethernet, a Docker
-//! bridge per user-defined network, a libvirt bridge, a VPN tunnel, loopback,
-//! and several IPv6 addresses. Returning the first one found is the bug this
-//! whole project exists to fix.
-//!
-//! # How it decides
-//!
-//! Two stages, deliberately separated:
-//!
-//! 1. **Disqualification** removes only what is *objectively* unusable — a down
-//!    interface, loopback, link-local, the wrong family, an explicitly excluded
-//!    name. These can never be the right answer, so no amount of scoring should
-//!    resurrect them.
-//! 2. **Scoring** ranks everything that survives. Nothing else is filtered.
-//!
-//! That split matters. It would be easy to hard-filter container interfaces —
-//! Docker bridges are never the answer — but some people really do put their
-//! LAN on a bridge, and `br0` owning the default route should still win. So
-//! containers take a large penalty instead of an outright ban: Docker's
-//! routeless bridges sink far below anything real, while a legitimate bridge
-//! carrying the default route climbs back out.
-//!
-//! Every candidate keeps the list of rules that fired on it, which is what
-//! lets a later `autonet doctor` explain a verdict without re-deriving it.
+//! Deterministic address selection and scoring.
 
 use std::cmp::Reverse;
 use std::net::IpAddr;
@@ -98,11 +73,7 @@ pub enum Disqualification {
     ExcludedByConfig,
     /// A different interface was demanded via `require_interface`.
     NotRequiredInterface,
-    /// A container or virtualisation interface that carries no default route.
-    ///
-    /// Such an interface is not a path to anywhere: handing a developer
-    /// `172.17.0.1` when the machine is offline looks like an answer but is one
-    /// no other device can reach. Silence is more honest than a wrong address.
+    /// A synthetic interface without a default route.
     SyntheticWithoutRoute,
 }
 
@@ -198,11 +169,7 @@ impl SelectedAddress {
         }
     }
 
-    /// A URL another device on the same network can actually open.
-    ///
-    /// This — not a bind address — is AutoNet's whole purpose. `0.0.0.0:3000`
-    /// is a perfectly good thing to listen on and a useless thing to type into
-    /// a phone.
+    /// Build a peer-reachable URL.
     #[must_use]
     pub fn url(&self, port: u16, scheme: &str) -> String {
         format!("{scheme}://{}:{port}", self.url_host())
@@ -226,25 +193,14 @@ impl Selection {
         self.candidates.iter().filter(|c| c.is_eligible())
     }
 
-    /// A human-readable explanation of why nothing was selected.
-    ///
-    /// Usually the most common disqualification, which is nearly always the
-    /// actual story: everything was down, or everything was loopback. The
-    /// config is needed because two of the interesting cases — "you narrowed
-    /// the search yourself" and "this network gave you no usable address of
-    /// that family" — cannot be told apart from the candidate list alone.
+    /// Explain why no candidate was selected.
     #[must_use]
     pub fn failure_reason(&self, config: &SelectionConfig) -> String {
         if self.candidates.is_empty() {
             return "no interfaces reported any addresses".to_string();
         }
 
-        // `NotRequiredInterface` and `ExcludedByConfig` mean "the user narrowed
-        // the search", not "this address was unusable". On a machine with
-        // twenty interfaces they are the overwhelming majority the moment
-        // `--interface` is given, and reporting them would tell the user only
-        // what they already know. So they are set aside first, and consulted
-        // only if nothing else was rejected.
+        // Prefer network failures over configuration narrowing.
         let narrowing = |d: &Disqualification| {
             matches!(
                 d,
@@ -259,10 +215,6 @@ impl Selection {
         let considered: Vec<Disqualification> =
             rejected.iter().copied().filter(|d| !narrowing(d)).collect();
 
-        // Nothing but narrowing reasons: the machine may be perfectly healthy
-        // and the user simply pointed at an interface that has no addresses.
-        // "most common reason: not the requested interface" would be a
-        // non-answer, so say what actually happened.
         if considered.is_empty() {
             return if rejected
                 .iter()
@@ -274,19 +226,7 @@ impl Selection {
             };
         }
 
-        // A modal count answers "what rejected the most addresses", which is
-        // not the same question as "why can nothing be reached". On a machine
-        // with a dozen veths the tally is dominated by container interfaces
-        // even when the real story is that this network handed out no routable
-        // address at all — the ordinary case for IPv6 behind a home router.
-        // Blaming Docker there would send the user hunting the wrong problem,
-        // so that case is recognised before any counting happens.
-        //
-        // Only addresses of the family that was asked for can speak to whether
-        // that family is usable. Filtering on the family rather than on the
-        // `FamilyMismatch` verdict matters: disqualification is ordered, and an
-        // IPv4 address on a down interface is reported as `InterfaceDown` long
-        // before the family check ever sees it.
+        // Check peer reachability before tallying disqualifications.
         let in_family: Vec<&Candidate> = self
             .candidates
             .iter()
@@ -307,8 +247,7 @@ impl Selection {
             );
         }
 
-        // Counted in a Vec rather than a map so that ties resolve toward the
-        // first reason encountered, keeping the message stable run to run.
+        // A Vec keeps tie-breaking stable.
         let mut counts: Vec<(Disqualification, usize)> = Vec::new();
         for reason in considered.iter().copied() {
             match counts.iter_mut().find(|(k, _)| *k == reason) {
@@ -327,11 +266,7 @@ impl Selection {
     }
 }
 
-/// The distinct scopes present, as prose.
-///
-/// Listed from the data rather than hard-coded as "loopback and link-local" so
-/// the sentence stays true if an unusual machine turns up something else.
-/// Sorted by name so the message reads the same on every run.
+/// Format the distinct address scopes present.
 fn scopes_present(candidates: &[&Candidate]) -> String {
     let mut names: Vec<String> = candidates
         .iter()
@@ -346,11 +281,7 @@ fn scopes_present(candidates: &[&Candidate]) -> String {
     }
 }
 
-/// Score every address on the machine and pick the best one.
-///
-/// Never fails: a machine with nothing usable yields a [`Selection`] whose
-/// `selected` is `None` and whose candidates explain why. Use
-/// [`select_address`] when you want that turned into an error.
+/// Score every address and return the full selection result.
 #[must_use]
 pub fn select(state: &NetworkState, config: &SelectionConfig) -> Selection {
     let mut candidates: Vec<Candidate> = Vec::new();
@@ -361,8 +292,7 @@ pub fn select(state: &NetworkState, config: &SelectionConfig) -> Selection {
         }
     }
 
-    // Eligible first; then by score descending; then by interface index and
-    // address, so the outcome never depends on enumeration order.
+    // Keep output deterministic when scores tie.
     candidates.sort_by(|a, b| {
         a.disqualified
             .is_some()
@@ -395,14 +325,10 @@ pub fn select(state: &NetworkState, config: &SelectionConfig) -> Selection {
 
 /// Select an address, treating "nothing usable" as an error.
 ///
-/// The convenient form for callers such as `autonet ip`, which must either
-/// print an address or exit non-zero.
-///
 /// # Errors
 ///
 /// Returns [`CoreError::NoAddressFound`] when nothing survives the filters,
-/// carrying a human-readable account of why — an offline machine and a machine
-/// whose only address was disqualified are different problems.
+/// carrying a human-readable account of why.
 pub fn select_address(state: &NetworkState, config: &SelectionConfig) -> Result<SelectedAddress> {
     let mut selection = select(state, config);
     match selection.selected.take() {
@@ -413,10 +339,7 @@ pub fn select_address(state: &NetworkState, config: &SelectionConfig) -> Result<
     }
 }
 
-/// Record a rule that fired and return its contribution.
-///
-/// Rules worth zero are not recorded, so the reason list reads as "what
-/// actually moved this candidate" rather than a roll call of every rule.
+/// Record non-zero scoring rules.
 fn push(reasons: &mut Vec<Reason>, rule: &'static str, delta: i32) -> i32 {
     if delta != 0 {
         reasons.push(Reason::new(rule, delta));
@@ -449,7 +372,6 @@ fn evaluate(
     let mut score = 0;
     let family = address.family;
 
-    // --- Routing: by far the strongest signal an interface is real. ---
     if state.has_default_route(interface.index, family) {
         score += push(
             &mut candidate.reasons,
@@ -464,7 +386,6 @@ fn evaluate(
         );
     }
 
-    // --- What kind of device it is. ---
     let kind_delta = match &interface.kind {
         InterfaceKind::Ethernet => weights::KIND_ETHERNET,
         InterfaceKind::Wireless => weights::KIND_WIRELESS,
@@ -487,7 +408,6 @@ fn evaluate(
     };
     score += push(&mut candidate.reasons, "interface_kind", kind_delta);
 
-    // --- Family preference. ---
     if config.prefer_family.preferred() == Some(family) {
         score += push(
             &mut candidate.reasons,
@@ -496,13 +416,10 @@ fn evaluate(
         );
     }
 
-    // --- Where the address sits in the address space. ---
     let scope_delta = match address.scope {
         AddressScope::Private | AddressScope::UniqueLocal => weights::SCOPE_PRIVATE,
         AddressScope::Global => weights::SCOPE_GLOBAL,
         AddressScope::Cgnat => weights::SCOPE_CGNAT,
-        // Loopback, link-local, and special never reach scoring unless the user
-        // explicitly allowed them, in which case they earn nothing.
         _ => 0,
     };
     score += push(&mut candidate.reasons, "address_scope", scope_delta);
@@ -519,16 +436,12 @@ fn evaluate(
         );
     }
 
-    // --- Route metric: the tiebreaker between two otherwise equal links. ---
     if let Some(metric) = state.default_route_metric(interface.index, family) {
-        // Capped before conversion, so the `try_from` can never actually fail;
-        // the fallback exists so a future cap change cannot introduce a panic.
         let capped = metric.min(weights::METRIC_CAP) / weights::METRIC_DIVISOR;
         let penalty = -i32::try_from(capped).unwrap_or(i32::MAX);
         score += push(&mut candidate.reasons, "route_metric", penalty);
     }
 
-    // --- An explicit instruction from the user outranks everything above. ---
     if any_name_matches(&config.prefer_interfaces, &interface.name) {
         score += push(
             &mut candidate.reasons,
@@ -548,9 +461,7 @@ fn disqualify(
     interface: &Interface,
     address: &Address,
 ) -> Option<Disqualification> {
-    // Whether the user named this interface themselves. An explicit instruction
-    // overrides the heuristics below — if someone asks for the Docker bridge,
-    // they get the Docker bridge.
+    // Explicit selection overrides synthetic-interface filtering.
     let explicitly_requested = config.require_interface.as_deref() == Some(interface.name.as_str())
         || any_name_matches(&config.prefer_interfaces, &interface.name);
 
@@ -565,10 +476,6 @@ fn disqualify(
     if interface.state.is_down() && !config.include_down {
         return Some(Disqualification::InterfaceDown);
     }
-    // A container or virtualisation interface with no default route leads
-    // nowhere. Note this is conditional on the route, not on the kind alone:
-    // a bridge that *does* carry the default route stays eligible, which is the
-    // case that stops this from breaking `br0`-style LAN bridges.
     if interface.kind.is_synthetic()
         && !config.allow_container
         && !explicitly_requested
@@ -576,16 +483,10 @@ fn disqualify(
     {
         return Some(Disqualification::SyntheticWithoutRoute);
     }
-    // Scope is checked before family on purpose. An `fe80::` address is
-    // unusable no matter which family the caller asked for, so reporting it as
-    // "link-local" explains more than "wrong address family" would; the latter
-    // is reserved for addresses that are perfectly good, just not the family
-    // requested.
+    // Report unusable scopes before a family mismatch.
     let scope_problem = match address.scope {
         AddressScope::Loopback if !config.allow_loopback => Some(Disqualification::Loopback),
         AddressScope::LinkLocal if !config.allow_link_local => Some(Disqualification::LinkLocal),
-        // Never selectable: `0.0.0.0` is a bind address, not a destination, and
-        // multicast/broadcast/documentation addresses are not this machine.
         AddressScope::Special => Some(Disqualification::SpecialAddress),
         _ => None,
     };

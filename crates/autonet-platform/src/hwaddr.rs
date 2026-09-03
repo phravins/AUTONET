@@ -1,10 +1,8 @@
 //! Rendering hardware addresses, shared by every backend.
 //!
-//! Each operating system hands us the bytes differently — netlink puts them in
-//! an `IFLA_ADDRESS` attribute, `getifaddrs` puts them inside an `AF_LINK`
-//! `sockaddr_dl` — but what counts as a *reportable* MAC is a decision about
-//! AutoNet's output, not about any kernel. Keeping it in one place means the
-//! Linux and macOS backends cannot drift into disagreeing about it.
+//! Each OS hands over the bytes differently, but what counts as a *reportable*
+//! MAC is a decision about AutoNet's output rather than about any kernel, so it
+//! lives in one place and the backends cannot drift.
 
 /// Render a hardware address, or `None` if it is absent or meaningless.
 ///

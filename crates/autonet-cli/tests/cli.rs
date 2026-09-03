@@ -1,24 +1,13 @@
-//! End-to-end tests for the `autonet` binary.
-//!
-//! These assert the *contract* — exit codes, stream discipline, and the shape
-//! of `--json` — rather than which address this particular machine has. What
-//! address gets picked is decided by `autonet-core` and tested exhaustively
-//! against fixtures; asserting it again here would only make the suite fail
-//! whenever someone runs it on a train.
-//!
-//! Every invocation is isolated from the developer's own configuration, so a
-//! `~/.config/autonet/config.toml` on the machine running the tests cannot
-//! change the result.
+//! End-to-end CLI tests.
 
 use std::process::Command as StdCommand;
 
 use assert_cmd::prelude::*;
 
-/// The binary, insulated from the ambient environment.
+/// Build an isolated command invocation.
 fn autonet() -> StdCommand {
     let mut command = StdCommand::cargo_bin("autonet").expect("the autonet binary is built");
-    // A config file in the developer's home directory would silently change
-    // what these tests assert.
+    // Isolate the test from local configuration.
     command.env("HOME", "/nonexistent-autonet-test-home");
     command.env_remove("XDG_CONFIG_HOME");
     for name in [
@@ -31,9 +20,7 @@ fn autonet() -> StdCommand {
     ] {
         command.env_remove(name);
     }
-    // Colour would corrupt the assertions below, and would also corrupt a
-    // user's `$(autonet ip)`. Set explicitly so the test proves the parsing
-    // rather than relying on stdout not being a terminal.
+    // Keep output free of terminal styling.
     command.env("NO_COLOR", "1");
     command
 }
@@ -41,10 +28,6 @@ fn autonet() -> StdCommand {
 fn stdout_of(output: &std::process::Output) -> &str {
     std::str::from_utf8(&output.stdout).expect("stdout is UTF-8")
 }
-
-// ---------------------------------------------------------------------------
-// Contract that holds on every platform
-// ---------------------------------------------------------------------------
 
 #[test]
 fn help_explains_what_the_tool_is_for() {
@@ -85,20 +68,7 @@ fn an_unparseable_family_fails_rather_than_falling_back() {
     assert!(output.stdout.is_empty());
 }
 
-// ---------------------------------------------------------------------------
-// Contract that needs a working backend
-// ---------------------------------------------------------------------------
-
-// Gated on the platforms with a backend: elsewhere `provider()` returns
-// `Unsupported`, and asserting that a snapshot describes the machine would be
-// asserting that AutoNet has been ported.
-//
-// Windows joins as of 2b Task 2, which is the first change to make its snapshot
-// describe a real machine. Note what these tests do and do not prove there:
-// they assert invariants — one address on stdout, a loopback interface present,
-// MACs withheld without `-v`, JSON that round-trips — which a CI VM with one
-// virtual NIC can satisfy. They cannot prove the *right* address was chosen,
-// because a runner has only one to choose from.
+// These tests require a supported platform backend.
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 mod live {
     use std::net::IpAddr;
@@ -107,8 +77,7 @@ mod live {
 
     use super::*;
 
-    /// Exit code 1 means "nothing selectable", which is a legitimate answer on
-    /// a disconnected machine. Anything else from these commands is a failure.
+    /// Accept success or the expected no-address exit code.
     fn assert_selection_exit(output: &std::process::Output) {
         let code = output.status.code();
         assert!(
