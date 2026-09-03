@@ -160,3 +160,8 @@ test guards the format against accidental drift.
 
 Later: `.local` hostnames via mDNS, Docker awareness, QR codes, IDE integration,
 installers.
+
+Decisions that constrain a milestone's design, rather than its schedule, are
+recorded in [`adr/`](adr/). M3's process model — whether `autonet run` supervises
+its child or only launches it — is settled by
+[ADR 0001](adr/0001-network-change-during-autonet-run.md).
