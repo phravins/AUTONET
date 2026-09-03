@@ -1,5 +1,6 @@
 //! Selection configuration and its file/environment loaders.
 
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -85,22 +86,15 @@ pub enum OutputFormat {
 
 impl Config {
     /// The default configuration path: `$XDG_CONFIG_HOME/autonet/config.toml`,
-    /// falling back to `~/.config/autonet/config.toml`.
+    /// then `%APPDATA%\autonet\config.toml`, then
+    /// `~/.config/autonet/config.toml`.
     #[must_use]
     pub fn default_path() -> Option<PathBuf> {
-        if let Some(xdg) = std::env::var_os("XDG_CONFIG_HOME") {
-            if !xdg.is_empty() {
-                return Some(PathBuf::from(xdg).join("autonet").join("config.toml"));
-            }
-        }
-        std::env::var_os("HOME")
-            .filter(|h| !h.is_empty())
-            .map(|home| {
-                PathBuf::from(home)
-                    .join(".config")
-                    .join("autonet")
-                    .join("config.toml")
-            })
+        path_from(
+            std::env::var_os("XDG_CONFIG_HOME"),
+            std::env::var_os("APPDATA"),
+            std::env::var_os("HOME"),
+        )
     }
 
     /// Parse configuration from a TOML string.
@@ -198,6 +192,38 @@ impl Config {
         config.apply_env()?;
         Ok(config)
     }
+}
+
+/// Pick a config path from the three variables that might name one.
+///
+/// Taking the values rather than reading them keeps the order testable without
+/// mutating the process environment, which `cargo test`'s thread pool makes
+/// unsafe to do from one test among many.
+///
+/// A plain fallback chain rather than a `cfg(target_os)` branch: Linux and macOS
+/// do not set `APPDATA`, Windows does not normally set `XDG_CONFIG_HOME`, so the
+/// order degrades correctly without the crate needing to know which OS it is on
+/// — which `architecture.md` forbids it from knowing.
+fn path_from(
+    xdg: Option<OsString>,
+    appdata: Option<OsString>,
+    home: Option<OsString>,
+) -> Option<PathBuf> {
+    // `XDG_CONFIG_HOME` and `APPDATA` both name a config *root*; `HOME` names a
+    // home directory, so only it grows a `.config` segment.
+    if let Some(root) = xdg.filter(|v| !v.is_empty()) {
+        return Some(config_file(Path::new(&root)));
+    }
+    if let Some(root) = appdata.filter(|v| !v.is_empty()) {
+        return Some(config_file(Path::new(&root)));
+    }
+    home.filter(|v| !v.is_empty())
+        .map(|home| config_file(&Path::new(&home).join(".config")))
+}
+
+/// AutoNet's config file inside a configuration root.
+fn config_file(root: &Path) -> PathBuf {
+    root.join("autonet").join("config.toml")
 }
 
 fn non_empty_env(key: &str) -> Option<String> {
@@ -321,5 +347,52 @@ mod tests {
         assert!(!name_matches("br-*", "br0"));
         // A bare `*` matches everything.
         assert!(name_matches("*", "wlo1"));
+    }
+
+    /// The three variables, hand-set. Never the runner's own environment: that
+    /// differs per platform and would make the assertions untrustworthy.
+    fn paths(xdg: Option<&str>, appdata: Option<&str>, home: Option<&str>) -> Option<PathBuf> {
+        path_from(
+            xdg.map(OsString::from),
+            appdata.map(OsString::from),
+            home.map(OsString::from),
+        )
+    }
+
+    #[test]
+    fn xdg_config_home_wins_when_set() {
+        assert_eq!(
+            paths(Some("/cfg"), Some("/appdata"), Some("/home/u")),
+            Some(PathBuf::from("/cfg/autonet/config.toml"))
+        );
+    }
+
+    #[test]
+    fn appdata_is_tried_after_xdg_and_before_home() {
+        // The Windows case: no XDG, and `.config` must not appear — APPDATA
+        // already names a configuration root.
+        assert_eq!(
+            paths(None, Some("/appdata"), Some("/home/u")),
+            Some(PathBuf::from("/appdata/autonet/config.toml"))
+        );
+    }
+
+    #[test]
+    fn home_is_the_last_resort_and_grows_a_dot_config() {
+        assert_eq!(
+            paths(None, None, Some("/home/u")),
+            Some(PathBuf::from("/home/u/.config/autonet/config.toml"))
+        );
+    }
+
+    #[test]
+    fn an_empty_variable_falls_through_rather_than_rooting_at_nothing() {
+        // `XDG_CONFIG_HOME=""` would otherwise yield `/autonet/config.toml`.
+        assert_eq!(
+            paths(Some(""), Some("/appdata"), Some("/home/u")),
+            Some(PathBuf::from("/appdata/autonet/config.toml"))
+        );
+        assert_eq!(paths(Some(""), Some(""), Some("")), None);
+        assert_eq!(paths(None, None, None), None);
     }
 }

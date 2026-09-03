@@ -10,6 +10,8 @@ fn autonet() -> StdCommand {
     // Isolate the test from local configuration.
     command.env("HOME", "/nonexistent-autonet-test-home");
     command.env_remove("XDG_CONFIG_HOME");
+    // Set on every Windows runner, and now consulted by `Config::default_path`.
+    command.env_remove("APPDATA");
     for name in [
         "AUTONET_FAMILY",
         "AUTONET_INTERFACE",

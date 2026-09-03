@@ -165,7 +165,9 @@ my phone reach" never requires publishing one. Pass `-v` if you need them.
 
 ## Configuration
 
-`~/.config/autonet/config.toml` (or `$XDG_CONFIG_HOME/autonet/config.toml`):
+The first of these that names a directory, so the same rule works everywhere:
+`$XDG_CONFIG_HOME/autonet/config.toml`, then `%APPDATA%\autonet\config.toml`
+(Windows), then `~/.config/autonet/config.toml`.
 
 ```toml
 [selection]
