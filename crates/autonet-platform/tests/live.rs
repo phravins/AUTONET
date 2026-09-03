@@ -273,12 +273,23 @@ fn a_default_route_normalises_and_names_a_source_bound_to_its_own_interface() {
             "default route {route:?} was not normalised to a null destination"
         );
 
-        // A default route out of a broadcast link needs a router to hand
-        // packets to. Deliberately *not* asserted for point-to-point links: a
-        // utun default route installed by WireGuard or Tailscale is routinely
-        // on-link with no next hop, and demanding one there would fail on a Mac
-        // that is working exactly as intended.
-        if !interface.flags.point_to_point && interface.kind != InterfaceKind::Loopback {
+        // A default route out of a broadcast NIC needs a router to hand packets
+        // to. Demanded of nothing else, for two separate reasons. A utun default
+        // route installed by WireGuard or Tailscale is routinely on-link with no
+        // next hop, so asserting it on a point-to-point link would fail on a Mac
+        // that is working exactly as intended. And Windows reports a
+        // legitimately gateway-less route as `None` rather than as the phantom
+        // `0.0.0.0` it stores — `winroute::gateway` — so a Hyper-V switch or an
+        // on-link-configured adapter would fail this on a machine that is
+        // correct. Narrowed to the kinds the assertion was written for: it still
+        // fires on the real NIC where a sockaddr-stride bug shows up.
+        let demanding = matches!(
+            interface.kind,
+            InterfaceKind::Ethernet | InterfaceKind::Wireless
+        ) && interface.flags.broadcast
+            && !interface.flags.point_to_point;
+
+        if demanding {
             let Some(gateway) = route.gateway else {
                 panic!("default route on {} has no next hop", interface.name);
             };
@@ -288,15 +299,19 @@ fn a_default_route_normalises_and_names_a_source_bound_to_its_own_interface() {
             // interface. If the sockaddr walk slipped by one slot, the gateway
             // would be read out of `RTA_IFA`, which is exactly the interface's
             // own address, and the result would otherwise look entirely
-            // plausible. Point-to-point links are excluded above for a real
-            // reason: macOS routinely installs a utun default route whose
-            // gateway *is* the tunnel's own address, and asserting this there
-            // would fail on a Mac with a VPN working correctly.
+            // plausible. Everything narrowed out above is narrowed out for a
+            // real reason: macOS routinely installs a utun default route whose
+            // gateway *is* the tunnel's own address.
             assert!(
                 !interface.addresses.iter().any(|a| a.ip == gateway),
                 "default route on {} points its next hop at {gateway}, an address \
                  bound to that same interface",
                 interface.name
+            );
+        } else if route.gateway.is_none() {
+            println!(
+                "note: on-link default route on {} ({})",
+                interface.name, interface.kind
             );
         }
 
@@ -566,6 +581,509 @@ fn two_links_of_the_same_kind_are_ordered_by_the_service_order() {
 }
 
 // ---------------------------------------------------------------------------
+// Windows-specific invariants
+//
+// Every one of these skips gracefully rather than assuming a configuration. A
+// machine with IPv6 off, one NIC, or no tunnel is a correctly-configured
+// machine, and a test that fails on it is a test bug rather than a backend one.
+//
+// None of them has ever run. There is no Windows hardware behind this file, and
+// Milestone 2b Task 7 is the first time any of it executes.
+// ---------------------------------------------------------------------------
+
+#[cfg(target_os = "windows")]
+#[test]
+#[ignore = "queries the live network"]
+fn the_loopback_adapter_is_classified_and_owns_no_reported_route() {
+    // `winroute::is_reportable` drops the rows Windows flags as loopback and any
+    // multicast destination, so that `autonet routes` reads like Linux's
+    // unicast-only dump and macOS's flag filter. This is the only check that
+    // filter will ever get against real rows.
+    use autonet_core::model::Interface;
+
+    let state = provider().unwrap().snapshot().unwrap();
+
+    let loopbacks: Vec<&Interface> = state
+        .interfaces
+        .iter()
+        .filter(|interface| interface.kind == InterfaceKind::Loopback)
+        .collect();
+    assert!(
+        !loopbacks.is_empty(),
+        "Windows always has a loopback pseudo-interface, and `wintype` did not \
+         classify one: {:?}",
+        state
+            .interfaces
+            .iter()
+            .map(|interface| (&interface.name, &interface.kind))
+            .collect::<Vec<_>>()
+    );
+
+    for loopback in &loopbacks {
+        assert!(
+            loopback.flags.loopback,
+            "{} is classified loopback but not flagged loopback",
+            loopback.name
+        );
+        assert!(
+            loopback
+                .addresses
+                .iter()
+                .any(|address| address.scope == AddressScope::Loopback),
+            "{} carries no loopback address: {:?}",
+            loopback.name,
+            loopback.addresses
+        );
+
+        // If this fires, `MIB_IPFORWARD_ROW2.Loopback` is not the flag
+        // `is_reportable` takes it for — worth learning either way.
+        assert!(
+            !state
+                .routes
+                .iter()
+                .any(|route| route.interface_index == loopback.index),
+            "a route survived the loopback filter on {}",
+            loopback.name
+        );
+    }
+
+    for route in &state.routes {
+        if let Some(network) = route.destination {
+            assert!(
+                !network.addr.is_multicast(),
+                "route {route:?} has a multicast destination the row filter should \
+                 have dropped"
+            );
+        }
+    }
+
+    println!(
+        "{} loopback interface(s), {} reported route(s)",
+        loopbacks.len(),
+        state.routes.len()
+    );
+}
+
+#[cfg(target_os = "windows")]
+#[test]
+#[ignore = "queries the live network"]
+fn a_dual_stack_adapter_keeps_both_route_families_on_one_interface() {
+    // The failure Task 4's LUID join exists to prevent, against real data for
+    // the first time.
+    //
+    // Asserting that both families "resolve to the same interface" would be
+    // tautological: by the time the state is a `NetworkState` the join has
+    // already happened and only an index survives. The shape the bug left behind
+    // is not tautological. Reading `MIB_IPFORWARD_ROW2.InterfaceIndex` directly
+    // gave an IPv6 row the adapter's `Ipv6IfIndex`, which on a dual-stack adapter
+    // belongs to no interface at all — so exactly the IPv6 routes of exactly the
+    // adapters where IPv6 works went missing, silently.
+    //
+    // The assumption this rests on, named rather than assumed: Windows installs
+    // an on-link `fe80::/64` route for every IPv6-bound interface, so an adapter
+    // holding an IPv6 address and no IPv6 route has had them dropped.
+    use autonet_core::model::Family;
+
+    let state = provider().unwrap().snapshot().unwrap();
+    let mut dual_stack = 0usize;
+    let mut considered = Vec::new();
+
+    for interface in &state.interfaces {
+        if interface.kind == InterfaceKind::Loopback {
+            continue;
+        }
+
+        let has_v6_address = interface.addresses_of(Family::V6).next().is_some();
+        let count = |family| {
+            state
+                .routes
+                .iter()
+                .filter(|route| route.interface_index == interface.index && route.family == family)
+                .count()
+        };
+        let (v4, v6) = (count(Family::V4), count(Family::V6));
+        considered.push((interface.name.clone(), has_v6_address, v4, v6));
+
+        if !has_v6_address || v4 == 0 {
+            continue;
+        }
+
+        assert!(
+            v6 > 0,
+            "{} holds an IPv6 address and {v4} IPv4 route(s) but no IPv6 route: the \
+             LUID join dropped them onto an index no interface carries",
+            interface.name
+        );
+        dual_stack += 1;
+    }
+
+    if dual_stack == 0 {
+        println!(
+            "skipped: no adapter here has both an IPv6 address and IPv4 routes, so \
+             the join cannot be exercised. (name, has v6 address, v4 routes, v6 \
+             routes): {considered:?}"
+        );
+        return;
+    }
+
+    println!("{dual_stack} dual-stack adapter(s) kept both route families: {considered:?}");
+}
+
+#[cfg(target_os = "windows")]
+#[test]
+#[ignore = "queries the live network"]
+fn a_default_routes_next_hop_is_on_the_interface_it_names() {
+    // `every_route_points_at_an_interface_that_exists` only asks whether the
+    // index resolves to *something*. A route mis-joined onto a different real
+    // adapter resolves perfectly well and is invisible to it — the residual half
+    // of the LUID risk. A router is reachable on the link it sits on, so its
+    // address falls inside one of that link's own prefixes, and that is knowable
+    // from the snapshot alone.
+    //
+    // Residual risk, stated rather than glossed: a deliberately off-subnet
+    // `onlink` gateway is legal, rare on Windows, and would fail this.
+    use autonet_core::model::Family;
+
+    let state = provider().unwrap().snapshot().unwrap();
+    let mut checked = 0usize;
+
+    for route in state.default_routes().filter(|r| r.family == Family::V4) {
+        let Some(gateway) = route.gateway else {
+            continue;
+        };
+        let interface = state
+            .interface_by_index(route.interface_index)
+            .expect("every route names an interface that exists");
+
+        if interface.flags.point_to_point || interface.kind == InterfaceKind::Loopback {
+            continue;
+        }
+
+        let prefixes: Vec<IpNetwork> = interface
+            .addresses_of(Family::V4)
+            .map(|address| IpNetwork::new(address.ip, address.prefix_len))
+            .collect();
+        if prefixes.is_empty() {
+            continue;
+        }
+
+        checked += 1;
+        assert!(
+            prefixes.iter().any(|network| contains(*network, gateway)),
+            "default route on {} points its next hop at {gateway}, outside every \
+             prefix that interface holds ({prefixes:?}): the route may have been \
+             joined to the wrong adapter",
+            interface.name
+        );
+    }
+
+    println!("checked {checked} IPv4 default-route gateway(s) against their own interface");
+}
+
+#[cfg(target_os = "windows")]
+#[test]
+#[ignore = "queries the live network"]
+fn an_on_link_route_reports_no_gateway_rather_than_the_unspecified_address() {
+    // Windows fills `NextHop` with `0.0.0.0` or `::` for a route that needs no
+    // router, where Linux and macOS simply omit the attribute. Published as it
+    // arrives it would print a gateway that does not exist and earn a
+    // `has_gateway` bonus the route has not got; `winroute::gateway` maps it to
+    // `None`.
+    let state = provider().unwrap().snapshot().unwrap();
+
+    if state.routes.is_empty() {
+        println!("skipped: this machine reports no routes at all");
+        return;
+    }
+
+    let mut on_link = Vec::new();
+    for route in &state.routes {
+        match route.gateway {
+            Some(gateway) => assert!(
+                !gateway.is_unspecified(),
+                "route {route:?} publishes the unspecified address as a next hop"
+            ),
+            None => on_link.push(route),
+        }
+
+        // A default route arriving as `Some(0.0.0.0/0)` would mean the
+        // normalisation `winroute::destination` performs did not happen.
+        if route.is_default() {
+            assert!(
+                route.destination.is_none(),
+                "default route {route:?} was not normalised to a null destination"
+            );
+        }
+    }
+
+    assert!(
+        !on_link.is_empty(),
+        "every one of this machine's {} routes claims a next hop; Windows gives each \
+         IP-bound adapter an on-link subnet route, so `winroute::gateway` is \
+         publishing 0.0.0.0 as a gateway",
+        state.routes.len()
+    );
+
+    println!(
+        "{} of {} route(s) are on-link, e.g. {:?}",
+        on_link.len(),
+        state.routes.len(),
+        on_link[0]
+    );
+}
+
+#[cfg(target_os = "windows")]
+#[test]
+#[ignore = "queries the live network"]
+fn every_route_metric_includes_its_interfaces_own_metric() {
+    // `windows::route::route_from` falls back to an interface metric of zero when
+    // the LUID lookup misses, and `winroute::effective_metric` is a sum — so a
+    // metric of zero on a real adapter means the interface metric contributed
+    // nothing. That is precisely the inertness Task 4 was written to prevent,
+    // where every default route ties at zero and the tie-break falls to whatever
+    // order Windows walked its NDIS tables.
+    //
+    // The assumption, DOCUMENTED only: Windows' automatic metrics start at 5 and
+    // its UI enforces a minimum of 1, so 0 is not a value a bound IP interface
+    // reports. If this fires on a healthy machine then that assumption is what is
+    // wrong, and learning so is worth more than the test passing.
+    //
+    // What it does *not* catch, stated plainly: whether `MIB_IPFORWARD_ROW2.Metric`
+    // is the offset Microsoft documents or already the effective value. Both
+    // readings produce a plausible sum and the model carries no separate
+    // interface-metric field, so no assertion over `Route.metric` can separate
+    // them. Only comparing the numbers printed below against `netsh interface
+    // ipv4 show interfaces` on the machine itself can.
+    let state = provider().unwrap().snapshot().unwrap();
+    let mut metrics = Vec::new();
+
+    for route in &state.routes {
+        let interface = state
+            .interface_by_index(route.interface_index)
+            .expect("every route names an interface that exists");
+
+        if interface.kind == InterfaceKind::Loopback || interface.state.is_down() {
+            continue;
+        }
+
+        assert!(
+            route.metric > 0,
+            "route {route:?} on {} has an effective metric of zero: either the LUID \
+             join missed this adapter or its interface metric read as zero",
+            interface.name
+        );
+        metrics.push((interface.name.as_str(), route.family, route.metric));
+    }
+
+    println!("route metrics by interface: {metrics:?}");
+}
+
+#[cfg(target_os = "windows")]
+#[test]
+#[ignore = "requires a connected machine"]
+fn repeated_snapshots_select_the_same_interface() {
+    // `adapters::walk` sorts by name precisely so that `GetAdaptersAddresses`'
+    // enumeration order cannot reach the tie-break. This asserts nothing about
+    // *which* interface wins — that depends on the machine, and asserting it
+    // would be a test of one setup rather than of the code. It asserts only that
+    // the answer does not move.
+    use autonet_core::config::SelectionConfig;
+    use autonet_core::model::NetworkState;
+    use autonet_core::select::select_address;
+
+    let provider = provider().expect("a backend for this platform");
+    let first = provider.snapshot().expect("a snapshot");
+    let second = provider.snapshot().expect("a second snapshot");
+
+    // Sorted rather than compared positionally: reordering is exactly what this
+    // test is looking for, but it has to be told apart from the network itself
+    // changing between the two calls.
+    let shape = |state: &NetworkState| {
+        let mut lines: Vec<String> = state
+            .interfaces
+            .iter()
+            .map(|interface| {
+                format!(
+                    "if {} {} {}",
+                    interface.index, interface.name, interface.kind
+                )
+            })
+            .chain(state.routes.iter().map(|route| format!("rt {route:?}")))
+            .collect();
+        lines.sort();
+        lines
+    };
+
+    if shape(&first) != shape(&second) {
+        println!(
+            "skipped: the network changed between the two snapshots — a DHCP renew or \
+             a Wi-Fi roam is not a bug, and there is nothing to compare"
+        );
+        return;
+    }
+
+    // `CoreError` carries no `PartialEq`, so the comparison is over `.ok()`.
+    // That treats every failure as one answer rather than distinguishing the
+    // variants — which is the right reading here: a machine with nothing to
+    // select must keep selecting nothing, and an offline machine is a legitimate
+    // machine to run this on.
+    let config = SelectionConfig::default();
+    let once = select_address(&first, &config).ok();
+
+    assert_eq!(
+        once,
+        select_address(&second, &config).ok(),
+        "two snapshots of an unchanged network selected different addresses"
+    );
+    assert_eq!(
+        once,
+        select_address(&first, &config).ok(),
+        "one snapshot selected differently on a second pass"
+    );
+
+    match once {
+        Some(selected) => println!("stable: {} on {}", selected.ip, selected.interface),
+        None => println!("stable: this machine selects no address"),
+    }
+}
+
+#[cfg(target_os = "windows")]
+#[test]
+#[ignore = "requires two links of the same kind up at once"]
+fn two_links_of_the_same_kind_are_ordered_by_the_interface_metric() {
+    use autonet_core::config::SelectionConfig;
+    use autonet_core::model::{Family, Interface, NetworkState};
+    use autonet_core::select::select_address;
+
+    // The case the interface metric exists for, and the one no CI runner can
+    // stage: a laptop on a dock with its built-in NIC also up, or two Wi-Fi
+    // adapters. Nothing in the scoring policy separates two links of the same
+    // kind, so without the metric the raw interface index decides — an accident
+    // of enumeration order. Direct mirror of the macOS service-order test above.
+    let state = provider().unwrap().snapshot().unwrap();
+
+    // Eligible: up, not loopback, owning an IPv4 default route with a next hop,
+    // and carrying at least one peer-reachable IPv4 address.
+    let eligible: Vec<(&Interface, u32, AddressScope)> = state
+        .interfaces
+        .iter()
+        .filter(|interface| interface.kind != InterfaceKind::Loopback && !interface.state.is_down())
+        .filter_map(|interface| {
+            let metric = state.default_route_metric(interface.index, Family::V4)?;
+            state.gateway_for(interface.index, Family::V4)?;
+
+            // One scope per interface, or it is not comparable: the scope weights
+            // dwarf what the metric tie-break is worth. On Windows that gap is
+            // wider than on macOS — automatic metrics of 5 against 35 come to a
+            // three-point difference once `METRIC_DIVISOR` has divided it, where
+            // a rank of macOS service order is worth ten. It decides the tie
+            // deterministically, and it decides it by a hair.
+            let mut scopes = interface
+                .addresses_of(Family::V4)
+                .filter(|address| address.scope.is_reachable_by_peers())
+                .map(|address| address.scope);
+            let scope = scopes.next()?;
+            if scopes.any(|other| other != scope) {
+                return None;
+            }
+            Some((interface, metric, scope))
+        })
+        .collect();
+
+    // A group is two or more eligible links of the same kind and scope whose
+    // metrics actually differ. Without differing metrics there is no ordering to
+    // check.
+    let group: Vec<&(&Interface, u32, AddressScope)> = eligible
+        .iter()
+        .find_map(|(interface, _, scope)| {
+            let peers: Vec<&(&Interface, u32, AddressScope)> = eligible
+                .iter()
+                .filter(|(other, _, other_scope)| {
+                    other.kind == interface.kind && other_scope == scope
+                })
+                .collect();
+            let distinct = peers.iter().map(|(_, metric, _)| *metric).min()
+                != peers.iter().map(|(_, metric, _)| *metric).max();
+            (peers.len() >= 2 && distinct).then_some(peers)
+        })
+        .unwrap_or_default();
+
+    if group.is_empty() {
+        println!(
+            "skipped: this machine has no two comparable links of the same kind at \
+             different interface metrics, so the tie-break cannot be exercised here. \
+             Interfaces considered: {:?}",
+            eligible
+                .iter()
+                .map(|(interface, metric, _)| (&interface.name, &interface.kind, metric))
+                .collect::<Vec<_>>()
+        );
+        return;
+    }
+
+    // A state narrowed to just the group, built from the machine's own data, so
+    // that metric and interface index are the only things left that differ.
+    let narrowed = NetworkState::new(
+        group
+            .iter()
+            .map(|(interface, _, scope)| {
+                let mut trimmed = (*interface).clone();
+                trimmed
+                    .addresses
+                    .retain(|address| address.family == Family::V4 && address.scope == *scope);
+                trimmed
+            })
+            .collect(),
+        group
+            .iter()
+            .filter_map(|(interface, _, _)| {
+                state
+                    .default_routes()
+                    .find(|route| {
+                        route.interface_index == interface.index && route.family == Family::V4
+                    })
+                    .cloned()
+            })
+            .collect(),
+    );
+
+    let best = group
+        .iter()
+        .min_by_key(|(_, metric, _)| *metric)
+        .expect("the group is not empty");
+    let selected = select_address(&narrowed, &SelectionConfig::default())
+        .expect("a group built from real default routes should select something");
+
+    println!(
+        "same-kind group: {:?}",
+        group
+            .iter()
+            .map(|(interface, metric, _)| (&interface.name, metric))
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        selected.interface, best.0.name,
+        "the interface metric lost to something else between two {} links",
+        best.0.kind
+    );
+
+    // Only a demonstration, never a failure: if the best-metric link also has the
+    // lowest index, the assertion above would pass without the metric being
+    // consulted at all, and the run should say so.
+    let lowest_index = group
+        .iter()
+        .min_by_key(|(interface, _, _)| interface.index)
+        .expect("the group is not empty");
+    if lowest_index.0.index == best.0.index {
+        println!(
+            "note: {} is both best-metric and lowest-indexed, so this run does not \
+             distinguish the interface metric from the old index tie-break",
+            best.0.name
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
@@ -593,4 +1111,18 @@ fn network_address(network: IpNetwork) -> IpAddr {
             IpAddr::V6(Ipv6Addr::from(u128::from(v6) & mask))
         }
     }
+}
+
+/// Whether `ip` sits inside `network`.
+///
+/// Built on [`network_address`] rather than beside it: two addresses share a
+/// network exactly when masking both at the same prefix gives the same answer.
+/// Gated because only the Windows section uses it, and an ungated helper nothing
+/// calls is dead code under `-D warnings`.
+#[cfg(target_os = "windows")]
+fn contains(network: IpNetwork, ip: IpAddr) -> bool {
+    if network.addr.is_ipv4() != ip.is_ipv4() {
+        return false;
+    }
+    network_address(network) == network_address(IpNetwork::new(ip, network.prefix_len))
 }
