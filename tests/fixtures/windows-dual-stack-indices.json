@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "interfaces": [
+    {
+      "name": "Loopback Pseudo-Interface 1",
+      "index": 1,
+      "kind": "loopback",
+      "state": "unknown",
+      "addresses": [
+        { "ip": "127.0.0.1", "family": "ipv4", "prefix_len": 8, "scope": "loopback" }
+      ]
+    },
+    {
+      "name": "Ethernet",
+      "index": 12,
+      "kind": "ethernet",
+      "state": "up",
+      "addresses": [
+        { "ip": "192.168.1.50", "family": "ipv4", "prefix_len": 24, "scope": "private" },
+        { "ip": "2001:db8:1::50", "family": "ipv6", "prefix_len": 64, "scope": "global" }
+      ]
+    },
+    {
+      "name": "Wi-Fi",
+      "index": 5,
+      "kind": "wireless",
+      "state": "up",
+      "addresses": [
+        { "ip": "192.168.2.50", "family": "ipv4", "prefix_len": 24, "scope": "private" },
+        { "ip": "2001:db8:2::50", "family": "ipv6", "prefix_len": 64, "scope": "global" }
+      ]
+    }
+  ],
+  "routes": [
+    { "destination": null, "gateway": "192.168.1.1", "interface_index": 12,
+      "metric": 25, "family": "ipv4", "preferred_source": null },
+    { "destination": null, "gateway": "fe80::1", "interface_index": 12,
+      "metric": 25, "family": "ipv6", "preferred_source": null },
+    { "destination": null, "gateway": "192.168.2.1", "interface_index": 5,
+      "metric": 55, "family": "ipv4", "preferred_source": null },
+    { "destination": null, "gateway": "fe80::2", "interface_index": 5,
+      "metric": 55, "family": "ipv6", "preferred_source": null }
+  ]
+}

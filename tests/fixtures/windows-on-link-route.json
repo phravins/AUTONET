@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "interfaces": [
+    {
+      "name": "Loopback Pseudo-Interface 1",
+      "index": 1,
+      "kind": "loopback",
+      "state": "unknown",
+      "addresses": [
+        { "ip": "127.0.0.1", "family": "ipv4", "prefix_len": 8, "scope": "loopback" }
+      ]
+    },
+    {
+      "name": "Ethernet",
+      "index": 11,
+      "kind": "ethernet",
+      "state": "up",
+      "addresses": [
+        { "ip": "10.20.0.11", "family": "ipv4", "prefix_len": 24, "scope": "private" }
+      ]
+    },
+    {
+      "name": "Ethernet 2",
+      "index": 12,
+      "kind": "ethernet",
+      "state": "up",
+      "addresses": [
+        { "ip": "10.20.1.12", "family": "ipv4", "prefix_len": 24, "scope": "private" }
+      ]
+    }
+  ],
+  "routes": [
+    { "destination": null, "gateway": "10.20.0.1", "interface_index": 11,
+      "metric": 25, "family": "ipv4", "preferred_source": null },
+    { "destination": null, "gateway": null, "interface_index": 12,
+      "metric": 25, "family": "ipv4", "preferred_source": null },
+    { "destination": "10.20.1.0/24", "gateway": null, "interface_index": 12,
+      "metric": 281, "family": "ipv4", "preferred_source": null }
+  ]
+}

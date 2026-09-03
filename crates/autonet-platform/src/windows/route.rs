@@ -16,7 +16,7 @@ use crate::{winparse, winroute, PlatformError};
 ///
 /// One call covers IPv4 and IPv6, where macOS needs a dump per family. `links`
 /// comes from the adapter walk and carries the index each interface was given;
-/// see [`interface_index`] for why the row's own index is only a fallback.
+/// see [`winroute::route_index`] for why the row's own index is only a fallback.
 pub(crate) fn dump_routes(links: &HashMap<u64, AdapterLink>) -> Result<Vec<Route>, PlatformError> {
     let mut table: *mut MIB_IPFORWARD_TABLE2 = std::ptr::null_mut();
 
@@ -87,7 +87,7 @@ fn route_from(row: &MIB_IPFORWARD_ROW2, links: &HashMap<u64, AdapterLink>) -> Op
     Some(Route {
         destination: winroute::destination(prefix, row.DestinationPrefix.PrefixLength),
         gateway: winparse::sockaddr_ip(inet_bytes(&row.NextHop)).and_then(winroute::gateway),
-        interface_index: interface_index(row, link),
+        interface_index: winroute::route_index(row.InterfaceIndex, link.map(|link| link.index)),
         metric: winroute::effective_metric(row.Metric, link.map_or(0, |link| link.metric(family))),
         family,
         // `MIB_IPFORWARD_ROW2` has no equivalent of Linux's `RTA_PREFSRC` or
@@ -95,23 +95,6 @@ fn route_from(row: &MIB_IPFORWARD_ROW2, links: &HashMap<u64, AdapterLink>) -> Op
         // `select` reads it, so this is a reporting gap only.
         preferred_source: None,
     })
-}
-
-/// The index of the interface a route exits through.
-///
-/// The LUID is the join key because `Interface.index` holds either `IfIndex` or
-/// `Ipv6IfIndex` — separate namespaces — and a row's `InterfaceIndex` is
-/// whichever one matches its own family. On a dual-stack adapter whose two
-/// indices differ, joining on the row's index would leave every IPv6 route
-/// pointing at no interface at all. Reading the index back through the map the
-/// adapter walk built means the two cannot disagree.
-///
-/// A route whose adapter that walk did not return falls back to the row's own
-/// index, and to 0 when it has none. Emitted either way: an unjoined route is
-/// merely unscored, where a dropped one hides a working network. `rtparse` does
-/// the same on macOS.
-fn interface_index(row: &MIB_IPFORWARD_ROW2, link: Option<&AdapterLink>) -> u32 {
-    link.map_or(row.InterfaceIndex, |link| link.index)
 }
 
 /// View a `SOCKADDR_INET` as bytes for [`winparse::sockaddr_ip`].
@@ -141,14 +124,5 @@ mod tests {
         // `sockaddr_ip` reads 24 bytes for a v6 address. A union smaller than
         // that would silently truncate every IPv6 gateway.
         assert!(size_of::<SOCKADDR_INET>() >= 24);
-    }
-
-    #[test]
-    fn an_unjoined_row_keeps_its_own_index_rather_than_being_dropped() {
-        let row = MIB_IPFORWARD_ROW2 {
-            InterfaceIndex: 7,
-            ..Default::default()
-        };
-        assert_eq!(interface_index(&row, None), 7);
     }
 }

@@ -21,7 +21,7 @@ use super::iftable::{self, Row};
 use crate::hwaddr::format_mac;
 use crate::winparse::{self, af, oper};
 use crate::wintype::{self, Evidence};
-use crate::PlatformError;
+use crate::{winroute, PlatformError};
 
 // Keep Linux-testable constants aligned with windows-sys.
 const _: () = {
@@ -193,15 +193,10 @@ fn interface_from(
     // SAFETY: The union exposes the adapter flags.
     let flags = unsafe { adapter.Anonymous2.Flags };
 
-    // Prefer the IPv4 index when present. `IfIndex` and `Ipv6IfIndex` are
-    // separate namespaces, so this single field cannot represent both; the
-    // route walk joins on the LUID and reads the index back from here rather
-    // than trusting `MIB_IPFORWARD_ROW2.InterfaceIndex` to agree.
-    let index = if ipv4_index == 0 {
-        adapter.Ipv6IfIndex
-    } else {
-        ipv4_index
-    };
+    // The route walk joins on the LUID and reads this index back rather than
+    // trusting `MIB_IPFORWARD_ROW2.InterfaceIndex` to agree; see
+    // `winroute::route_index`.
+    let index = winroute::adapter_index(ipv4_index, adapter.Ipv6IfIndex);
 
     let interface = Interface {
         name,

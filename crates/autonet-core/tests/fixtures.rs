@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 
 use autonet_core::config::SelectionConfig;
-use autonet_core::model::{FamilyPreference, NetworkState};
+use autonet_core::model::{Family, FamilyPreference, NetworkState};
 use autonet_core::select::{select, select_address, Disqualification};
 
 /// Return the fixture directory.
@@ -401,6 +401,180 @@ fn the_macos_service_order_cannot_promote_wifi_over_ethernet() {
         pick("macos-wifi-and-ethernet", &SelectionConfig::default()),
         "10.0.0.20"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Windows-shaped scenarios
+//
+// Synthetic, hand-built data, exactly as the `macos-*` files are. Nothing here
+// came off a Windows machine, and `windows-real-*` stays reserved for a genuine
+// capture that does not exist yet — see `tests/fixtures/README.md`.
+//
+// They encode what the Windows backend is *expected* to emit: default routes
+// with a `null` destination, a `null` gateway where Windows reports the
+// unspecified address on-link, and a metric that is already the documented sum
+// of the route offset and the owning adapter's interface metric. If any of those
+// assumptions about Windows is wrong, these fixtures agree with the bug and
+// pass. What they do establish is that the selector combines them correctly.
+// ---------------------------------------------------------------------------
+
+/// A dual-stack adapter whose `IfIndex` and `Ipv6IfIndex` disagree.
+///
+/// `Ethernet` is index 12 because that is its `IfIndex`; Windows also gave it
+/// `Ipv6IfIndex` 24, a value from a different namespace that no `Interface`
+/// carries. Both of its routes report 12, because the backend joins them to the
+/// adapter by LUID and reads the index back from the adapter walk.
+///
+/// The control at the end re-points the IPv6 route at 24 — precisely what a
+/// backend trusting `MIB_IPFORWARD_ROW2.InterfaceIndex` would emit — and the
+/// IPv6 answer moves to the *other* adapter. That is the "silent, total IPv6
+/// selection failure on exactly the machines where IPv6 works" this shape exists
+/// to rule out: no error, no missing address, just the wrong interface.
+///
+/// The join itself is decided in the platform crate and cannot be reached from a
+/// fixture; `winroute::route_index`'s unit tests cover that half.
+#[test]
+fn a_dual_stack_windows_adapter_answers_in_both_families_from_one_interface() {
+    const IF_INDEX: u32 = 12;
+    const IPV6_IF_INDEX: u32 = 24;
+
+    assert_eq!(
+        pick("windows-dual-stack-indices", &SelectionConfig::default()),
+        "192.168.1.50"
+    );
+
+    let v6 = select_address(&fixture("windows-dual-stack-indices"), &ipv6()).unwrap();
+    assert_eq!(v6.ip.to_string(), "2001:db8:1::50");
+    assert_eq!(v6.interface, "Ethernet");
+    assert_eq!(v6.interface_index, IF_INDEX);
+    assert_eq!(v6.gateway.unwrap().to_string(), "fe80::1");
+
+    let mut unjoined = fixture("windows-dual-stack-indices");
+    for route in &mut unjoined.routes {
+        if route.interface_index == IF_INDEX && route.family == Family::V6 {
+            route.interface_index = IPV6_IF_INDEX;
+        }
+    }
+    assert!(
+        unjoined.interfaces.iter().all(|i| i.index != IPV6_IF_INDEX),
+        "the control must point the route at an index no interface has"
+    );
+    let broken = select_address(&unjoined, &ipv6()).expect("still selects something, wrongly");
+    assert_eq!(
+        broken.ip.to_string(),
+        "2001:db8:2::50",
+        "the control did not change the answer, so the first assertion proves nothing"
+    );
+}
+
+/// An on-link default route: Windows reports `NextHop` as `0.0.0.0`.
+///
+/// The two links are identical apart from that, so the gateway is the only thing
+/// that can decide between them. What must not happen is `0.0.0.0` being
+/// published as a gateway and collecting `has_gateway` on the way past — the
+/// backend suppresses it in `winroute::gateway`, and this pins the same
+/// behaviour where a caller would actually see it.
+#[test]
+fn a_windows_on_link_route_neither_scores_nor_reports_a_gateway() {
+    let state = fixture("windows-on-link-route");
+    let selection = select(&state, &SelectionConfig::default());
+
+    let candidate = |name: &str| {
+        selection
+            .eligible()
+            .find(|candidate| candidate.interface == name)
+            .unwrap_or_else(|| panic!("{name} should be eligible"))
+    };
+    let fired = |name: &str, rule: &str| candidate(name).reasons.iter().any(|r| r.rule == rule);
+
+    assert_eq!(
+        pick("windows-on-link-route", &SelectionConfig::default()),
+        "10.20.0.11"
+    );
+
+    assert!(fired("Ethernet", "has_gateway"));
+    assert!(
+        !fired("Ethernet 2", "has_gateway"),
+        "an on-link route was scored for a gateway it has not got"
+    );
+
+    // Still a default route, though. Losing the +1000 would be the opposite
+    // failure and just as wrong.
+    assert!(fired("Ethernet 2", "default_route"));
+
+    let on_link = select_address(
+        &state,
+        &SelectionConfig {
+            require_interface: Some("Ethernet 2".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        on_link.gateway, None,
+        "the unspecified address was reported as a gateway"
+    );
+}
+
+/// A docked Windows machine: two Ethernet links, a tunnel, a Hyper-V switch.
+///
+/// The Windows counterpart of `macos-dock-and-vpn`, and the same assertions.
+/// `Ethernet 2` carries the *worse* interface index and the *better* interface
+/// metric, so the tie cannot be won by enumeration order; the control at the end
+/// flattens the metrics and watches the winner move to `Ethernet`, which is what
+/// makes the first assertion a measurement rather than a coincidence.
+///
+/// Metrics are Windows automatic-metric values (5 for a gigabit link, 35 for a
+/// 100Mb one) already summed with each route's offset of 0. Note how little the
+/// tie-break is worth once `METRIC_DIVISOR` has divided it: **3 points**, where
+/// the macOS service order is worth 10 per rank. It decides the tie
+/// deterministically, and it decides it by a hair.
+///
+/// The tunnel is given the *best* metric on the machine, so what demotes it is
+/// `KIND_VPN` and nothing else — no VPN special-casing exists anywhere in the
+/// Windows route code. The Hyper-V switch is `Other("virtual-ethernet")`, the
+/// classification Task 3 settled on: worth zero rather than `KIND_ETHERNET`'s
+/// +250 or `KIND_SYNTHETIC`'s −800, so it stays selectable on a host whose real
+/// uplink runs through it while losing to any real link that also has a route.
+#[test]
+fn a_docked_windows_machine_prefers_the_lower_metric_and_never_the_tunnel() {
+    let winner = |state: &NetworkState| {
+        select_address(state, &SelectionConfig::default())
+            .expect("a docked machine has a usable address")
+            .ip
+            .to_string()
+    };
+
+    assert_eq!(winner(&fixture("windows-dock-and-vpn")), "10.30.1.13");
+
+    let selection = select(
+        &fixture("windows-dock-and-vpn"),
+        &SelectionConfig::default(),
+    );
+    let score_of = |name: &str| {
+        selection
+            .eligible()
+            .find(|candidate| candidate.interface == name)
+            .unwrap_or_else(|| panic!("{name} should still be eligible"))
+            .score
+    };
+    for demoted in ["WireGuard Tunnel", "vEthernet (Default Switch)"] {
+        assert!(
+            score_of(demoted) < score_of("Ethernet") && score_of(demoted) < score_of("Ethernet 2"),
+            "{demoted} outscored a real link: {} vs {} and {}",
+            score_of(demoted),
+            score_of("Ethernet"),
+            score_of("Ethernet 2")
+        );
+    }
+
+    // Control: with equal metrics the two Ethernet links are indistinguishable
+    // and the tie falls back to the interface index, so `Ethernet` wins.
+    let mut flattened = fixture("windows-dock-and-vpn");
+    for route in &mut flattened.routes {
+        route.metric = 0;
+    }
+    assert_eq!(winner(&flattened), "10.30.0.12");
 }
 
 #[test]

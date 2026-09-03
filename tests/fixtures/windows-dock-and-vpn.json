@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "interfaces": [
+    {
+      "name": "Loopback Pseudo-Interface 1",
+      "index": 1,
+      "kind": "loopback",
+      "state": "unknown",
+      "addresses": [
+        { "ip": "127.0.0.1", "family": "ipv4", "prefix_len": 8, "scope": "loopback" }
+      ]
+    },
+    {
+      "name": "Ethernet",
+      "index": 12,
+      "kind": "ethernet",
+      "state": "up",
+      "addresses": [
+        { "ip": "10.30.0.12", "family": "ipv4", "prefix_len": 24, "scope": "private" }
+      ]
+    },
+    {
+      "name": "Ethernet 2",
+      "index": 13,
+      "kind": "ethernet",
+      "state": "up",
+      "addresses": [
+        { "ip": "10.30.1.13", "family": "ipv4", "prefix_len": 24, "scope": "private" }
+      ]
+    },
+    {
+      "name": "WireGuard Tunnel",
+      "index": 20,
+      "kind": "vpn",
+      "state": "up",
+      "addresses": [
+        { "ip": "10.8.0.2", "family": "ipv4", "prefix_len": 24, "scope": "private" }
+      ]
+    },
+    {
+      "name": "vEthernet (Default Switch)",
+      "index": 30,
+      "kind": { "other": "virtual-ethernet" },
+      "state": "up",
+      "addresses": [
+        { "ip": "172.20.0.1", "family": "ipv4", "prefix_len": 20, "scope": "private" }
+      ]
+    }
+  ],
+  "routes": [
+    { "destination": null, "gateway": "10.30.0.1", "interface_index": 12,
+      "metric": 35, "family": "ipv4", "preferred_source": null },
+    { "destination": null, "gateway": "10.30.1.1", "interface_index": 13,
+      "metric": 5, "family": "ipv4", "preferred_source": null },
+    { "destination": null, "gateway": "10.8.0.1", "interface_index": 20,
+      "metric": 5, "family": "ipv4", "preferred_source": null },
+    { "destination": null, "gateway": "172.20.0.1", "interface_index": 30,
+      "metric": 5025, "family": "ipv4", "preferred_source": null }
+  ]
+}

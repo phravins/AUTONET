@@ -9,7 +9,7 @@ between them would be a bug in the selector, not in the data.
 
 ## Provenance
 
-Fixture data is only as good as where it came from, and the three groups below are
+Fixture data is only as good as where it came from, and the groups below are
 **not** equally strong evidence. Nothing here is a capture from real hardware.
 
 ### 1. OS-agnostic — hand-built, no operating system assumed
@@ -58,15 +58,56 @@ prove the selector combines interface classification and the service-order
 tie-break correctly; they prove nothing about whether a real Mac feeds it input of
 this shape.
 
-### 3. Real captures — none yet
+### 3. Windows-shaped — synthetic but targeted
+
+**Hand-built. Never compared against a real Windows machine.** Added in Milestone
+2b Task 5, for the two risks the Windows backend actually surfaced.
+
+| File | Scenario |
+|---|---|
+| `windows-dual-stack-indices.json` | an adapter whose `IfIndex` and `Ipv6IfIndex` disagree, with a route in each family |
+| `windows-on-link-route.json` | a default route with no next hop, beside an otherwise identical one that has a gateway |
+| `windows-dock-and-vpn.json` | two Ethernet links at different interface metrics, plus a WireGuard tunnel and a Hyper-V switch |
+
+They are shaped the way the Windows backend emits, which differs from the older
+files in three visible ways: a default route's `destination` is `null` rather than
+`"0.0.0.0/0"` ([`winroute::destination`](../../crates/autonet-platform/src/winroute.rs)
+normalises it), an on-link route's `gateway` is `null` where Windows itself
+reports `0.0.0.0`, and `metric` is already the documented sum of the route's own
+offset and the owning adapter's interface metric — so the values are Windows
+automatic-metric numbers (5 for a gigabit link, 25–35 for a slower one, 5000-odd
+for a Hyper-V switch), not the 100-per-rank values the `macos-*` files use.
+
+`windows-dock-and-vpn.json` is also the only fixture using `InterfaceKind::Other`,
+which serialises as `{ "other": "virtual-ethernet" }` — the classification
+[`wintype`](../../crates/autonet-platform/src/wintype.rs) gives an Ethernet-typed
+adapter with no hardware behind it.
+
+**What they do not establish.** The same caveat as the macOS group, and one more
+that is specific to Windows: the LUID→index join these fixtures depend on happens
+in `autonet-platform`, and a fixture is a `NetworkState` that has already been
+through it. No fixture can falsify that join — by the time the data is JSON the
+LUID is gone and only an index survives. What
+`windows-dual-stack-indices.json` pins is the *selector-level consequence* of a
+correct join, with a control case that fails loudly if the pre-join index is used
+instead. The join itself is unit-tested in `winroute::route_index`, on Linux.
+
+Nor do they say anything about whether Windows really reports what they assume:
+whether `Metric` is meaningful, whether the interface metric moves on a real
+dock, whether a real VPN adapter classifies as `Vpn`. That is the hardware
+acceptance run's job and nothing else's.
+
+### 4. Real captures — none yet
 
 There is no capture from real hardware in this directory, and no file here should
 ever be labelled as one unless it came off the machine it describes.
 
-**Naming rule:** `macos-*` is synthetic. A genuine capture lands as
-**`macos-real-<scenario>.json`**, written by the Milestone 2a hardware-acceptance
-run ([`docs/milestone-2a-acceptance.md`](../../docs/milestone-2a-acceptance.md)).
-Until one exists, the VPN-over-macOS case is verified only in theory.
+**Naming rule:** `macos-*` and `windows-*` are synthetic. A genuine capture lands
+as **`macos-real-<scenario>.json`** or **`windows-real-<scenario>.json`**, written
+by the corresponding hardware-acceptance run
+([`docs/milestone-2a-acceptance.md`](../../docs/milestone-2a-acceptance.md); the
+Windows one is Milestone 2b Task 7 and does not exist yet). Until one exists, the
+VPN case is verified only in theory on both platforms.
 
 ## Capturing one
 
