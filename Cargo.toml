@@ -20,6 +20,12 @@ autonet-platform = { path = "crates/autonet-platform", version = "0.1.0" }
 
 anyhow = "1"
 clap = { version = "4", features = ["derive", "wrap_help"] }
+# `autonet run` must survive the signal that stops its child, so it can reap the
+# child and report the child's own exit code. Doing that by hand would mean
+# sigaction on Unix and SetConsoleCtrlHandler on Windows, i.e. `#[cfg(target_os)]`
+# in the CLI, which architecture.md rule 2 forbids. `termination` widens the
+# handler from SIGINT alone to SIGTERM and SIGHUP.
+ctrlc = { version = "3", features = ["termination"] }
 owo-colors = "4"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

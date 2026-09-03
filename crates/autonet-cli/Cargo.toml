@@ -19,6 +19,7 @@ autonet-core = { workspace = true }
 autonet-platform = { workspace = true }
 anyhow = { workspace = true }
 clap = { workspace = true }
+ctrlc = { workspace = true }
 owo-colors = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

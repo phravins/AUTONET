@@ -44,7 +44,7 @@ impl Cli {
     }
 }
 
-/// The M1 command set. `run`, `watch` and `doctor` arrive in later milestones.
+/// The M1 command set plus `run`. `doctor` and `watch` arrive in later tasks.
 #[derive(Debug, Clone, Subcommand)]
 pub enum Command {
     /// Show the selected address and how it was chosen.
@@ -61,6 +61,51 @@ pub enum Command {
 
     /// List routing table entries.
     Routes,
+
+    /// Run a command with the LAN address in its environment.
+    ///
+    /// The long help is where the launch-time-snapshot semantics are stated to
+    /// the user. It is required reading rather than a nicety: a variable that
+    /// silently stops being true is worse than one that was never set, so the
+    /// contract is spelled out where `autonet run --help` will show it.
+    #[command(long_about = "\
+Run a command with AUTONET_IP, AUTONET_HOST and AUTONET_URL in its environment.
+
+    autonet run --port 3000 -- npm run dev
+
+The command is executed directly, as an argument vector. It is never handed to \
+a shell, so quoting, globs, pipes and semicolons are passed through to the \
+program untouched rather than interpreted.
+
+AUTONET_IP    the selected address, bare
+AUTONET_HOST  the same address ready for a URL, with IPv6 bracketed
+AUTONET_URL   http://HOST:PORT, set only when --port is given
+
+THESE ARE A SNAPSHOT TAKEN WHEN THE COMMAND STARTS. They are read once, before \
+the program is launched, and they are never updated afterwards. If the network \
+changes while the program is running -- Wi-Fi to Ethernet, a VPN coming up, a \
+cable being pulled -- the values inside it go stale, and AutoNet will not \
+restart the program or rewrite them.
+
+That is a deliberate decision, not an oversight; see \
+docs/adr/0001-network-change-during-autonet-run.md. A program that binds \
+0.0.0.0 or :: is unaffected, because it answers on whatever address the \
+interface currently holds. `autonet doctor` explains the case that is affected.
+
+autonet run exits with the exit code of the command it ran.")]
+    Run {
+        /// The command to run, then its arguments.
+        ///
+        /// Put `--` before it so that flags belong to the command rather than
+        /// to AutoNet: `autonet run -- vite --port 3000`.
+        #[arg(
+            trailing_var_arg = true,
+            allow_hyphen_values = true,
+            required = true,
+            value_name = "COMMAND"
+        )]
+        command: Vec<String>,
+    },
 }
 
 /// Flags accepted before or after any subcommand.

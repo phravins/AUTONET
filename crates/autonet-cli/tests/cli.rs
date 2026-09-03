@@ -37,7 +37,7 @@ fn help_explains_what_the_tool_is_for() {
     assert!(output.status.success());
 
     let help = stdout_of(&output);
-    for command in ["status", "ip", "interfaces", "routes"] {
+    for command in ["status", "ip", "interfaces", "routes", "run"] {
         assert!(help.contains(command), "--help omits `{command}`");
     }
     assert!(help.contains("--json"), "--help omits --json");

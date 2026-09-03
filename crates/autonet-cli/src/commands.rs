@@ -21,7 +21,7 @@ pub struct Context {
 }
 
 impl Context {
-    fn snapshot(&self) -> Result<NetworkState, CliError> {
+    pub(crate) fn snapshot(&self) -> Result<NetworkState, CliError> {
         self.provider.snapshot().map_err(CliError::Platform)
     }
 }
@@ -443,7 +443,10 @@ pub fn routes(ctx: &Context, args: &GlobalArgs) -> Result<(), CliError> {
 /// Without this, a typo produces "the requested interface has no usable
 /// addresses", which sends the user to look at their network when the problem
 /// is their spelling. Distinguishing the two is worth one extra check.
-fn check_requested_interface(ctx: &Context, state: &NetworkState) -> Result<(), CliError> {
+pub(crate) fn check_requested_interface(
+    ctx: &Context,
+    state: &NetworkState,
+) -> Result<(), CliError> {
     let Some(name) = &ctx.config.selection.require_interface else {
         return Ok(());
     };

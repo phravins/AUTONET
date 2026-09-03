@@ -6,16 +6,17 @@
 #![allow(clippy::doc_markdown)]
 
 mod cli;
+mod commands;
 mod render;
-mod run;
+mod spawn;
 
 use std::process::ExitCode;
 
 use clap::Parser;
 
 use crate::cli::{Cli, Command};
+use crate::commands::Context;
 use crate::render::Theme;
-use crate::run::Context;
 
 /// CLI exit codes.
 mod exit {
@@ -35,6 +36,8 @@ enum CliError {
     Config(autonet_core::CoreError),
     /// The command was asked for something that does not exist.
     Usage(String),
+    /// A child launched by `run` exited non-zero. Not an AutoNet failure.
+    ChildExit(u8),
 }
 
 impl CliError {
@@ -42,15 +45,22 @@ impl CliError {
         match self {
             Self::NoAddress(_) => exit::NO_ADDRESS,
             Self::Platform(_) | Self::Config(_) | Self::Usage(_) => exit::FAILED,
+            Self::ChildExit(code) => *code,
         }
     }
 
-    fn message(&self) -> String {
+    /// The line to print on stderr, if there is one.
+    ///
+    /// `ChildExit` deliberately has none. `autonet run -- make test` failing
+    /// its tests is the tests failing, and prefixing that with `autonet:`
+    /// would blame the launcher for the launched program's verdict.
+    fn message(&self) -> Option<String> {
         match self {
-            Self::NoAddress(reason) => format!("no usable address: {reason}"),
-            Self::Platform(error) => error.to_string(),
-            Self::Config(error) => error.to_string(),
-            Self::Usage(message) => message.clone(),
+            Self::NoAddress(reason) => Some(format!("no usable address: {reason}")),
+            Self::Platform(error) => Some(error.to_string()),
+            Self::Config(error) => Some(error.to_string()),
+            Self::Usage(message) => Some(message.clone()),
+            Self::ChildExit(_) => None,
         }
     }
 }
@@ -62,7 +72,9 @@ fn main() -> ExitCode {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             // Keep command output machine-readable.
-            eprintln!("autonet: {}", error.message());
+            if let Some(message) = error.message() {
+                eprintln!("autonet: {message}");
+            }
             ExitCode::from(error.exit_code())
         }
     }
@@ -84,9 +96,10 @@ fn run(cli: &Cli) -> Result<(), CliError> {
     };
 
     match cli.command() {
-        Command::Status => run::status(&ctx, &cli.global),
-        Command::Ip => run::ip(&ctx, &cli.global),
-        Command::Interfaces => run::interfaces(&ctx, &cli.global),
-        Command::Routes => run::routes(&ctx, &cli.global),
+        Command::Status => commands::status(&ctx, &cli.global),
+        Command::Ip => commands::ip(&ctx, &cli.global),
+        Command::Interfaces => commands::interfaces(&ctx, &cli.global),
+        Command::Routes => commands::routes(&ctx, &cli.global),
+        Command::Run { command } => spawn::run(&ctx, &cli.global, &command),
     }
 }
