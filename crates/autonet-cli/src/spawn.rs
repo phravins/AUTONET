@@ -17,6 +17,7 @@ use autonet_core::select::{select, SelectedAddress};
 
 use crate::cli::GlobalArgs;
 use crate::commands::{check_requested_interface, Context};
+use crate::port;
 use crate::{exit, CliError};
 
 /// How long the child is given to act on the signal it already received before
@@ -48,6 +49,27 @@ pub fn run(ctx: &Context, args: &GlobalArgs, command: &[String]) -> Result<(), C
         ));
     };
 
+    // The port as it will actually be rendered: the flag if given, otherwise
+    // `output.default_port`. Read once, so the warning below and the variable
+    // handed to the child can never describe different ports.
+    //
+    // This uses the *parsed* flag, which clap separated from the trailing
+    // command at the `--` boundary before this function was entered. So
+    // `autonet run -- node server.js --port 3000` leaves this `None`: the port
+    // belongs to the child, nothing is probed, and the argument is passed
+    // through untouched.
+    let port = args.port(&ctx.config);
+
+    // Before the spawn, so a busy port is AutoNet's clear warning rather than
+    // the child's bind failure several seconds later. A warning and not a
+    // refusal: see `crate::port`.
+    if let Some(port) = port {
+        let check = port::inspect(selected.ip, port);
+        if let Some(warning) = port::describe(&check, port) {
+            eprintln!("autonet: {}: {warning}", ctx.theme.warn("warning"));
+        }
+    }
+
     // Before the spawn, not after. A Ctrl-C landing in the window between the
     // two would otherwise kill AutoNet at its default disposition and leave the
     // child running with nobody waiting on it.
@@ -58,7 +80,7 @@ pub fn run(ctx: &Context, args: &GlobalArgs, command: &[String]) -> Result<(), C
     // however it is spelled. Nothing here interprets quotes, globs or `;`.
     let mut child = StdCommand::new(program)
         .args(arguments)
-        .envs(env_vars(&selected, args.port))
+        .envs(env_vars(&selected, port))
         .spawn()
         .map_err(|error| spawn_error(program, &error))?;
 

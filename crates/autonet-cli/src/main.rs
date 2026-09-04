@@ -7,6 +7,7 @@
 
 mod cli;
 mod commands;
+mod port;
 mod render;
 mod spawn;
 

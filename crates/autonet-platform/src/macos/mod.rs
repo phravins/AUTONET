@@ -25,6 +25,7 @@
 //! than a running system.
 
 mod ifaddrs;
+pub(crate) mod portowner;
 mod route;
 mod scnetwork;
 

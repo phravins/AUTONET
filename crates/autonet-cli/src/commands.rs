@@ -62,7 +62,7 @@ fn status_json(
 
     match &selection.selected {
         Some(selected) => {
-            if let Some(port) = args.port {
+            if let Some(port) = args.port(&ctx.config) {
                 payload["urls"] = json!({
                     "local": format!("http://{}:{port}", local_host(selected.family)),
                     "network": selected.url(port, "http"),
@@ -118,7 +118,7 @@ fn status_text(
         }
         let _ = writeln!(out, "  {}  {}", theme.label("Scope    "), selected.scope);
 
-        if let Some(port) = args.port {
+        if let Some(port) = args.port(&ctx.config) {
             out.push('\n');
             let _ = writeln!(
                 out,
@@ -259,11 +259,11 @@ pub fn ip(ctx: &Context, args: &GlobalArgs) -> Result<(), CliError> {
     if args.json {
         let mut payload = serde_json::to_value(&selected).unwrap_or_else(|_| json!({}));
         payload["schema_version"] = json!(autonet_core::SCHEMA_VERSION);
-        if let Some(port) = args.port {
+        if let Some(port) = args.port(&ctx.config) {
             payload["url"] = json!(selected.url(port, "http"));
         }
         print!("{}", to_json_line(&payload));
-    } else if let Some(port) = args.port {
+    } else if let Some(port) = args.port(&ctx.config) {
         println!("{}", selected.url(port, "http"));
     } else {
         println!("{}", selected.ip);

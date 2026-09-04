@@ -85,7 +85,7 @@ Common flags, accepted before or after any command:
 |---|---|
 | `--json` | Machine-readable output. See [the JSON contract](#the-json-contract). |
 | `-f, --family <ipv4\|ipv6\|any>` | Which family to prefer. Default `ipv4`. |
-| `-p, --port <PORT>` | Also render the URL to open on another device. |
+| `-p, --port <PORT>` | Also render the URL to open on another device. Defaults to `output.default_port`. A hint about what to *print*, not about what a command will *bind* — `autonet run` warns if it is taken, and starts the command anyway. |
 | `-i, --interface <NAME>` | Use only this interface. |
 | `-x, --exclude <NAME>` | Never use this interface. Repeatable; a trailing `*` matches a prefix. |
 | `--allow-vpn` | Stop penalising VPN tunnels. |
@@ -183,7 +183,7 @@ prefer_interfaces  = []
 
 [output]
 format       = "text"          # text | json
-default_port = 0
+default_port = 0             # 0 means none; used by -p when the flag is absent
 ```
 
 Unknown keys are rejected rather than ignored, so a typo fails loudly instead of

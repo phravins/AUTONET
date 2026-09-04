@@ -3,6 +3,7 @@
 mod adapters;
 mod iftable;
 mod route;
+pub(crate) mod tcptable;
 
 use autonet_core::model::NetworkState;
 

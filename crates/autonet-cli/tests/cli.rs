@@ -73,8 +73,9 @@ fn an_unparseable_family_fails_rather_than_falling_back() {
 // These tests require a supported platform backend.
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 mod live {
-    use std::net::IpAddr;
+    use std::net::{IpAddr, TcpListener};
 
+    use assert_cmd::cargo::cargo_bin;
     use serde_json::Value;
 
     use super::*;
@@ -226,6 +227,157 @@ mod live {
         let bare: Value = serde_json::from_str(stdout_of(&bare)).unwrap();
         let explicit: Value = serde_json::from_str(stdout_of(&explicit)).unwrap();
         assert_eq!(bare["selected"], explicit["selected"]);
+    }
+
+    /// Write a throwaway config file and hand back its path.
+    ///
+    /// No temp-directory crate: one file per test, named for the test, in the
+    /// system temp directory, removed by the caller.
+    fn config_file(tag: &str, contents: &str) -> std::path::PathBuf {
+        let path = std::env::temp_dir().join(format!("autonet-{tag}-{}.toml", std::process::id()));
+        std::fs::write(&path, contents).expect("a writable temp directory");
+        path
+    }
+
+    #[test]
+    fn a_configured_default_port_renders_a_url_without_the_flag() {
+        // `output.default_port` shipped in the documented example config and
+        // was read by nothing until this task.
+        let path = config_file("default-port", "[output]\ndefault_port = 4173\n");
+        let output = autonet()
+            .args(["ip", "--config"])
+            .arg(&path)
+            .output()
+            .unwrap();
+        let _ = std::fs::remove_file(&path);
+        assert_selection_exit(&output);
+
+        if output.status.success() {
+            let url = stdout_of(&output).trim_end().to_string();
+            assert!(url.starts_with("http://"), "{url}");
+            assert!(url.ends_with(":4173"), "{url}");
+        }
+    }
+
+    #[test]
+    fn a_configured_port_of_zero_is_not_a_port() {
+        // `default_port = 0` is what the README's example config contains, and
+        // `http://192.168.1.20:0` is not a URL anyone can open.
+        let path = config_file("zero-port", "[output]\ndefault_port = 0\n");
+        let output = autonet()
+            .args(["ip", "--config"])
+            .arg(&path)
+            .output()
+            .unwrap();
+        let _ = std::fs::remove_file(&path);
+        assert_selection_exit(&output);
+
+        if output.status.success() {
+            let text = stdout_of(&output);
+            assert!(
+                !text.contains("http://"),
+                "a placeholder became a URL: {text}"
+            );
+            assert!(!text.contains(":0"), "{text}");
+        }
+    }
+
+    #[test]
+    fn the_flag_beats_the_configured_default_port() {
+        let path = config_file("port-precedence", "[output]\ndefault_port = 4173\n");
+        let output = autonet()
+            .args(["ip", "--port", "3000", "--config"])
+            .arg(&path)
+            .output()
+            .unwrap();
+        let _ = std::fs::remove_file(&path);
+        assert_selection_exit(&output);
+
+        if output.status.success() {
+            assert!(stdout_of(&output).trim_end().ends_with(":3000"));
+        }
+    }
+
+    #[test]
+    fn run_warns_about_a_taken_port_before_the_command_starts() {
+        // Held by this test, on the wildcard, so it is genuinely unavailable
+        // to anything the child might bind.
+        let held = TcpListener::bind("0.0.0.0:0").expect("a wildcard listener");
+        let port = held.local_addr().unwrap().port().to_string();
+
+        // The child is the autonet binary itself: present on every platform the
+        // tests run on, and `--version` exits immediately without touching the
+        // network.
+        let output = autonet()
+            .args(["run", "--port", &port, "--"])
+            .arg(cargo_bin("autonet"))
+            .arg("--version")
+            .output()
+            .unwrap();
+        assert_selection_exit(&output);
+
+        if output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(
+                stderr.contains("already in use") || stderr.contains("held elsewhere"),
+                "no warning for a port this test is holding: {stderr}"
+            );
+            // A warning, not a refusal: the command still ran.
+            assert!(stdout_of(&output).contains(env!("CARGO_PKG_VERSION")));
+        }
+    }
+
+    #[test]
+    fn a_port_after_the_double_dash_belongs_to_the_command_and_is_not_probed() {
+        // The boundary test. The same port is held, but `--port` is on the far
+        // side of `--`, so AutoNet never parses it, never probes it, and passes
+        // it through to the child untouched.
+        let held = TcpListener::bind("0.0.0.0:0").expect("a wildcard listener");
+        let port = held.local_addr().unwrap().port().to_string();
+
+        let output = autonet()
+            .args(["run", "--"])
+            .arg(cargo_bin("autonet"))
+            .args(["--version", "--port", &port])
+            .output()
+            .unwrap();
+        assert_selection_exit(&output);
+
+        if output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(
+                !stderr.contains("already in use") && !stderr.contains("held elsewhere"),
+                "a port past the `--` boundary was probed anyway: {stderr}"
+            );
+            assert!(stdout_of(&output).contains(env!("CARGO_PKG_VERSION")));
+        }
+    }
+
+    #[test]
+    fn run_stays_quiet_about_a_port_that_is_free() {
+        // A listener bound and released: the port is free again, so there is
+        // nothing to say. Guards against a warning that always fires.
+        let port = {
+            let held = TcpListener::bind("127.0.0.1:0").expect("a loopback listener");
+            held.local_addr().unwrap().port()
+        }
+        .to_string();
+
+        let output = autonet()
+            .args(["run", "--port", &port, "--"])
+            .arg(cargo_bin("autonet"))
+            .arg("--version")
+            .output()
+            .unwrap();
+        assert_selection_exit(&output);
+
+        if output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(
+                !stderr.contains("in use") && !stderr.contains("held"),
+                "a free port produced a warning: {stderr}"
+            );
+        }
     }
 
     #[test]

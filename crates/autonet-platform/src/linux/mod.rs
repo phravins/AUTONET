@@ -6,6 +6,8 @@
 //! multicast groups, which is what `autonet watch` needs in M4.
 
 mod netlink;
+pub(crate) mod portowner;
+mod procnet;
 mod sysfs;
 
 use autonet_core::model::NetworkState;

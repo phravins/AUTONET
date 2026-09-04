@@ -50,7 +50,7 @@ A change that breaks any of the above increments `schema_version`.
 | `platform` | string | Which backend produced this, e.g. `linux-netlink`. Diagnostic only; do not branch on it. |
 | `captured_at` | integer \| null | Unix seconds at snapshot time. |
 | `selected` | object \| null | `null` when nothing was selectable. |
-| `urls` | object | Present only when `--port` was given. |
+| `urls` | object | Present only when a port is known, from `--port` or `output.default_port`. |
 | `error` | string | Present only when `selected` is `null`. |
 | `candidates` | array | Present only with `-v`. See [below](#candidates). |
 
@@ -98,7 +98,8 @@ useful document.
 {"schema_version":1,"ip":"192.168.1.101","family":"ipv4","prefix_len":24,"scope":"private","interface":"wlo1","interface_index":3,"interface_kind":"wireless","gateway":"192.168.1.1","score":1415}
 ```
 
-With `--port`, a `url` field is added. When nothing is selectable:
+With a port known, from `--port` or `output.default_port`, a `url` field is added. When
+nothing is selectable:
 
 ```json
 {"schema_version":1,"ip":null,"error":"…"}

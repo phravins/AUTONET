@@ -63,6 +63,7 @@ windows-sys = { version = "0.61", features = [
     "Win32_NetworkManagement_IpHelper", # Tasks 2-4: GetAdaptersAddresses, GetIpForwardTable2, IF_TYPE_*
     "Win32_NetworkManagement_Ndis",     # Task 4: NET_LUID_LH, reached through MIB_IPFORWARD_ROW2
     "Win32_Networking_WinSock",         # Tasks 2 and 4: SOCKADDR_INET, ADDRESS_FAMILY
+    "Win32_System_Threading",           # M3 Task 2: OpenProcess, QueryFullProcessImageNameW
 ] }
 
 [dev-dependencies]

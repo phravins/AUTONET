@@ -79,7 +79,11 @@ program untouched rather than interpreted.
 
 AUTONET_IP    the selected address, bare
 AUTONET_HOST  the same address ready for a URL, with IPv6 bracketed
-AUTONET_URL   http://HOST:PORT, set only when --port is given
+AUTONET_URL   http://HOST:PORT, set only when a port is known -- from --port, or from output.default_port in the config file
+
+With a port, AutoNet checks whether it is already taken before starting the command, and says so up front rather than leaving the program to fail its own bind seconds later. Where the system will say, the holding process is named; on macOS AutoNet can tell that a port is busy but not what is holding it, and says which of the two it is telling you.
+
+That check WARNS AND STARTS THE COMMAND ANYWAY. --port says what URL to print, not what the command will bind, so a busy port is a good guess about a problem rather than a fact about one -- and a port given after -- belongs to the command, is never parsed by AutoNet, and is never probed.
 
 THESE ARE A SNAPSHOT TAKEN WHEN THE COMMAND STARTS. They are read once, before \
 the program is launched, and they are never updated afterwards. If the network \
@@ -127,6 +131,17 @@ pub struct GlobalArgs {
     pub family: Option<FamilyPreference>,
 
     /// Render URLs for this port, both local and LAN-reachable.
+    ///
+    /// Global on purpose. The port is an input to *URL rendering*, and URL
+    /// rendering is not one command's concern: `status` prints local and
+    /// network URLs, `ip` prints one, and `run` puts one in `AUTONET_URL`.
+    /// `autonet status --port 3000` is the tool's headline example, so scoping
+    /// the flag to `run` would break its front door. `interfaces` and `routes`
+    /// accept it and have no URL to render, so they ignore it.
+    ///
+    /// It is a hint about what to *print*, never a statement about what a
+    /// command will *bind* — which is why `autonet run` warns about a busy
+    /// port rather than refusing to start.
     #[arg(short = 'p', long, global = true, value_name = "PORT")]
     pub port: Option<u16>,
 
@@ -164,6 +179,25 @@ pub struct GlobalArgs {
 }
 
 impl GlobalArgs {
+    /// The port to render URLs for: the flag, else the config file.
+    ///
+    /// Kept out of [`Self::config`] because it is not a selection input — it
+    /// changes nothing about which address is chosen, only how it is printed.
+    ///
+    /// **Zero means "none" in both layers.** `output.default_port = 0` is what
+    /// the documented example config ships, and `http://192.168.1.20:0` is not
+    /// a URL anyone can open; treating it as a real port would turn a
+    /// placeholder into `AUTONET_URL`.
+    ///
+    /// The method and the field share the name deliberately: `self.port` is
+    /// the flag as typed and `args.port(&config)` is the value to use, and it
+    /// is the call sites that should read well.
+    pub fn port(&self, config: &Config) -> Option<u16> {
+        self.port
+            .or(config.output.default_port)
+            .filter(|port| *port != 0)
+    }
+
     /// Build the effective configuration.
     ///
     /// Precedence, lowest to highest: built-in defaults, the config file, the

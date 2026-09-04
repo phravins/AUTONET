@@ -5,6 +5,8 @@
 #![allow(clippy::must_use_candidate)]
 #![allow(clippy::doc_markdown)]
 
+use std::net::IpAddr;
+
 use autonet_core::model::NetworkState;
 
 // Shared backend helpers.
@@ -25,6 +27,10 @@ mod rtparse;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 mod servicerank;
+
+// Collision precedence for the port lookups, shared by Linux and Windows.
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+mod portmatch;
 
 // Windows IP Helper parsing.
 #[cfg(any(target_os = "linux", target_os = "windows"))]
@@ -121,5 +127,90 @@ pub fn provider() -> Result<Box<dyn NetworkProvider>, PlatformError> {
     #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
     {
         Ok(Box::new(unsupported::UnsupportedProvider::new()))
+    }
+}
+
+/// Who holds a listening TCP port, as far as this platform will say.
+///
+/// The variants are a ladder of decreasing certainty rather than alternatives:
+/// each one is the best answer the operating system was willing to give, and
+/// the caller is expected to phrase all of them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PortHolder {
+    /// A process this user may inspect, with the name it runs under.
+    Named {
+        /// The holding process.
+        pid: u32,
+        /// Its short command name, not a full path.
+        name: String,
+    },
+
+    /// The holding process is known but the system would not name it.
+    ///
+    /// Windows can refuse `OpenProcess` on a protected process, and on any
+    /// platform the process may exit between the lookup and the naming.
+    Unnamed {
+        /// The holding process.
+        pid: u32,
+    },
+
+    /// Held by another account, which this user may not inspect.
+    ///
+    /// Linux reports the owning uid of every socket but only lets a process
+    /// list another process's descriptors when it owns it, or is root.
+    OtherUser {
+        /// The account that opened the socket.
+        uid: u32,
+    },
+
+    /// The platform was asked and reported no listener on that port.
+    ///
+    /// Not the same as "free": the probe and the lookup are separate calls, so
+    /// a socket can appear or vanish between them.
+    NotListed,
+
+    /// This platform has no way to answer the question.
+    ///
+    /// Carries the target name so callers never have to name an operating
+    /// system themselves.
+    Unsupported {
+        /// The target the binary was built for, e.g. `"macos"`.
+        platform: &'static str,
+    },
+}
+
+/// Identify the process listening on `port` at `address` or its family wildcard.
+///
+/// Infallible by design. Every failure — an unreadable `/proc`, a refused
+/// handle, a platform with no interface for the question — degrades to a
+/// variant rather than an error, because this only ever enriches a diagnostic
+/// and must never turn a warning into one.
+///
+/// The answer is a snapshot and is inherently racy: it describes what was
+/// listening at the moment of the call.
+pub fn port_holder(address: IpAddr, port: u16) -> PortHolder {
+    #[cfg(target_os = "linux")]
+    {
+        linux::portowner::holder(address, port)
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        macos::portowner::holder(address, port)
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        windows::tcptable::holder(address, port)
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+    {
+        // The same reasoning as `UnsupportedProvider`: compile everywhere, and
+        // say so plainly rather than claiming a port is free.
+        let _ = (address, port);
+        PortHolder::Unsupported {
+            platform: std::env::consts::OS,
+        }
     }
 }
