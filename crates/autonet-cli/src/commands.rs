@@ -10,6 +10,7 @@ use serde::Serialize;
 use serde_json::json;
 
 use crate::cli::GlobalArgs;
+use crate::doctor::{self, Diagnosis, Snapshot};
 use crate::render::{table, Theme};
 use crate::CliError;
 
@@ -432,6 +433,116 @@ pub fn routes(ctx: &Context, args: &GlobalArgs) -> Result<(), CliError> {
         )
     );
     Ok(())
+}
+
+/// Run the diagnostic checklist and report it.
+///
+/// The only command that survives a failed snapshot: reporting that the
+/// operating system could not be queried is precisely doctor's job, so the
+/// checklist is printed with the reason on the first row and the rest marked
+/// unverified, and the platform error is still returned so the exit code is
+/// unchanged. Same shape as [`status`], which prints its report *and* returns
+/// [`CliError::NoAddress`].
+///
+/// A failure of [`autonet_platform::provider`] itself is not covered here,
+/// because `main` needs a provider to build a [`Context`] at all. On the three
+/// supported platforms that call constructs a struct and, on Linux, a
+/// single-threaded runtime; if it fails, the process is in trouble that a
+/// checklist would not clarify. The reachable case — a platform with no
+/// backend — returns a provider that fails at `snapshot`, which is the path
+/// above.
+pub fn doctor(ctx: &Context, args: &GlobalArgs) -> Result<(), CliError> {
+    let platform = ctx.provider.platform_name();
+    let os = std::env::consts::OS;
+
+    let state = match ctx.provider.snapshot() {
+        Ok(state) => state,
+        Err(error) => {
+            let diagnosis = Diagnosis {
+                platform,
+                os,
+                network: Err(error.to_string()),
+                port: None,
+            };
+            print!("{}", doctor_output(ctx, args, &diagnosis, None));
+            return Err(CliError::Platform(error));
+        }
+    };
+
+    check_requested_interface(ctx, &state)?;
+    let selection = select(&state, &ctx.config.selection);
+
+    // The one part of doctor that touches the network. Done here rather than
+    // inside the checks so that `doctor::checks` stays pure and fixture-driven,
+    // and only when there is an address to probe: `--port` without a selected
+    // address has nothing to ask a question about, and the rows above already
+    // say why.
+    let probe = args
+        .port(&ctx.config)
+        .zip(selection.selected.as_ref())
+        .map(|(port, selected)| (port, crate::port::inspect(selected.ip, port)));
+
+    let diagnosis = Diagnosis {
+        platform,
+        os,
+        network: Ok(Snapshot {
+            state: &state,
+            selection: &selection,
+            config: &ctx.config.selection,
+        }),
+        port: probe.as_ref().map(|(port, check)| (*port, check)),
+    };
+
+    print!(
+        "{}",
+        doctor_output(ctx, args, &diagnosis, state.captured_at)
+    );
+
+    if doctor::healthy(&doctor::checks(&diagnosis)) {
+        Ok(())
+    } else {
+        Err(CliError::Unhealthy)
+    }
+}
+
+fn doctor_output(
+    ctx: &Context,
+    args: &GlobalArgs,
+    diagnosis: &Diagnosis,
+    captured_at: Option<u64>,
+) -> String {
+    let checks = doctor::checks(diagnosis);
+
+    if !args.json {
+        return doctor::report(diagnosis.platform, &checks, ctx.theme);
+    }
+
+    let mut payload = json!({
+        "schema_version": autonet_core::SCHEMA_VERSION,
+        "platform": diagnosis.platform,
+        "os": diagnosis.os,
+        "ok": doctor::healthy(&checks),
+        "verdict": doctor::verdict(&checks).as_str(),
+        "summary": doctor::summary(&checks),
+        "checks": checks
+            .iter()
+            .map(|check| {
+                json!({
+                    "id": check.id,
+                    "label": check.label,
+                    "status": check.status.as_str(),
+                    "detail": check.detail,
+                })
+            })
+            .collect::<Vec<_>>(),
+    });
+
+    // Present only when there was a snapshot to date.
+    if let Some(captured_at) = captured_at {
+        payload["captured_at"] = json!(captured_at);
+    }
+
+    to_json_line(&payload)
 }
 
 // ---------------------------------------------------------------------------

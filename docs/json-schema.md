@@ -172,6 +172,68 @@ otherwise. Default routes are listed first.
 Routes are joined to interfaces by `interface_index`, which is the kernel's own
 index — the same key `interfaces[].index` uses.
 
+## `autonet doctor --json`
+
+```json
+{
+  "schema_version": 1,
+  "platform": "linux-netlink",
+  "os": "linux",
+  "captured_at": 1788540702,
+  "ok": true,
+  "verdict": "warn",
+  "summary": "1 warning, nothing failed, 1 not verified. AutoNet can give another device an address that reaches this machine.",
+  "checks": [
+    { "id": "operating_system", "label": "Operating system", "status": "pass", "detail": "linux, via linux-netlink" },
+    { "id": "network_interface", "label": "Network interface", "status": "pass", "detail": "wlo1 (wireless, up), and 3 more" },
+    { "id": "ipv4_address", "label": "IPv4 address", "status": "pass", "detail": "192.168.0.115/24 on wlo1" },
+    { "id": "default_route", "label": "Default route", "status": "pass", "detail": "via 192.168.0.1 on wlo1" },
+    { "id": "selected_address", "label": "Selected address", "status": "pass", "detail": "192.168.0.115 (private) on wlo1, which is not loopback" },
+    { "id": "lan_candidate", "label": "LAN reachable", "status": "pass", "detail": "1 address another device could reach" },
+    { "id": "port", "label": "Port 3000", "status": "warn", "detail": "already in use on 192.168.0.115. It is held by python3 (pid 67834)." },
+    { "id": "bind_address", "label": "Bind address", "status": "unknown", "detail": "AutoNet cannot see what address your server binds. …" }
+  ]
+}
+```
+
+`os` is the operating system this binary was built for; `platform` is the
+backend that read the machine. They differ in kind: two backends could exist for
+one OS.
+
+`captured_at` is present only when a snapshot was taken. When the operating
+system could not be queried, the field is absent, `operating_system` reports
+`fail` with the reason in its `detail`, and every other row is `unknown`.
+
+**Key off `id`, never off `label` or `detail`.** `id` is part of the contract
+and stable; `label` carries a value for the port row (`"Port 3000"`) and
+`detail` is prose written for a person to read, and both may be reworded.
+
+The rows are always present and always in this order. The `port` row is the one
+exception: it appears only when a port is known — from `--port` or
+`output.default_port` — *and* an address was selected to probe it against.
+
+`ok` is `true` when nothing failed, which is the same condition as exit code
+`0`. It is restated here so a consumer that only reads stdout does not have to
+inspect the exit status.
+
+### `status`
+
+| Value | Meaning |
+|---|---|
+| `pass` | Checked, and fine. |
+| `warn` | Checked, worth knowing about, not broken. |
+| `fail` | Checked, and broken. |
+| `unknown` | **Not checked.** AutoNet did not determine this. |
+
+`unknown` is not a pass and not a failure. It never contributes to `verdict`,
+and `verdict` is therefore one of `pass`, `warn` or `fail` only.
+
+The `bind_address` row is always `unknown`. AutoNet cannot observe what address
+another process passes to `bind()`, so that row is guidance rather than a
+measurement, and reporting it as a pass would claim a check that never
+happened. See
+[ADR 0001](adr/0001-network-change-during-autonet-run.md).
+
 ## Enumerations
 
 ### `family`
@@ -245,5 +307,5 @@ Address-level and interface-level checks are ordered, so a veth carrying only a
 link-local address reports the interface-level reason. Both are true; the
 broader one is reported.
 
-This array is the raw material for a future `autonet doctor`, which is why it is
-part of the contract rather than a debugging aid.
+This array is the raw material `autonet doctor` reads, which is why it is part
+of the contract rather than a debugging aid.

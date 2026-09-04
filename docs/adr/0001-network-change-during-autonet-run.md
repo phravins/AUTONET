@@ -244,3 +244,28 @@ The `[hostname]` configuration section that the mDNS work assumes **does not
 exist yet**. [`Config`](../../crates/autonet-core/src/config.rs) has exactly two
 sections, `selection` and `output`. Adding a third is a wire-format change and
 follows the rules in [`json-schema.md`](../json-schema.md).
+
+## Implementation note — 2026-09-04, M3 Task 3
+
+Commitment 5 above says the bind-address case "is detectable". **It is not, and
+`autonet doctor` does not claim to detect it.**
+
+The evidence AutoNet could gather is a listening socket's bound address, which
+Task 2's port tables already parse. That path only ever fires when the server is
+*already running*, so the common case — `autonet doctor --port 3000` before
+`npm run dev` — has nothing to observe. It would also have meant widening
+`PortHolder` across three platform backends to carry an address, which M3 Task 3
+was scoped to exclude, and it would have said more on Linux and Windows than on
+macOS, reintroducing exactly the per-platform unevenness Task 2 worked to
+declare out loud.
+
+So the row is **guidance**: it states the distinction, says plainly that AutoNet
+cannot see the answer, and points at the user's own bind configuration. It
+carries a fourth status, `unknown`, which exists so that a row AutoNet did not
+verify is not reported as one it passed.
+
+The commitment is therefore met as *warn*, not as *detect*. The sentence "doctor
+will detect and warn" in **Consequences** should be read as "doctor will warn".
+Nothing else in this record changes, and a later ADR that gains real evidence —
+from a running child `autonet run` spawned itself, say — would supersede this
+note rather than this record.

@@ -44,7 +44,7 @@ impl Cli {
     }
 }
 
-/// The M1 command set plus `run`. `doctor` and `watch` arrive in later tasks.
+/// The M1 command set plus `run` and `doctor`. `watch` arrives in M4.
 #[derive(Debug, Clone, Subcommand)]
 pub enum Command {
     /// Show the selected address and how it was chosen.
@@ -110,6 +110,41 @@ autonet run exits with the exit code of the command it ran.")]
         )]
         command: Vec<String>,
     },
+
+    /// Check whether this machine can be reached, and say what is wrong.
+    ///
+    /// The long help exists to set expectations about the last row, which is
+    /// the only one in the tool that reports something AutoNet did not check.
+    #[command(long_about = "\
+Run a checklist over this machine's networking and say, in plain language, \
+which layer is broken.
+
+    autonet doctor
+    autonet doctor --port 3000
+
+Each row is one of four verdicts:
+
+  [ ok ]  checked, and fine
+  [warn]  checked, worth knowing about, not broken
+  [fail]  checked, and broken
+  [ ?  ]  NOT CHECKED -- AutoNet did not determine this
+
+The last one is deliberate. A row AutoNet could not verify is not a pass, and \
+saying so is more use than a tick that means nothing.
+
+The bind-address row is always [ ? ]. AutoNet cannot see what address another \
+program passes to bind(), so that row explains the distinction and leaves the \
+answer to you: a server bound to one specific address stops answering when the \
+network changes, and a server bound to the wildcard (0.0.0.0 or ::) follows \
+it. It is advice, not a measurement, and it is not dressed up as one. See \
+docs/adr/0001-network-change-during-autonet-run.md.
+
+With --port, doctor also reports whether that port is already taken -- the same \
+probe autonet run makes, and the same caveat: --port says what URL to print, \
+not what any program will bind.
+
+Exits 0 when nothing failed, warnings included, and 1 when something did.")]
+    Doctor,
 }
 
 /// Flags accepted before or after any subcommand.

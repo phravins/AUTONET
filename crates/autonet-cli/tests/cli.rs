@@ -37,10 +37,23 @@ fn help_explains_what_the_tool_is_for() {
     assert!(output.status.success());
 
     let help = stdout_of(&output);
-    for command in ["status", "ip", "interfaces", "routes", "run"] {
+    for command in ["status", "ip", "interfaces", "routes", "run", "doctor"] {
         assert!(help.contains(command), "--help omits `{command}`");
     }
     assert!(help.contains("--json"), "--help omits --json");
+}
+
+#[test]
+fn doctor_help_says_the_bind_row_is_advice_rather_than_a_measurement() {
+    // The one row in the tool that reports something it did not check. If the
+    // help ever stops saying so, the row starts reading as a verdict.
+    let output = autonet().args(["doctor", "--help"]).output().unwrap();
+    assert!(output.status.success());
+
+    let help = stdout_of(&output);
+    assert!(help.contains("NOT CHECKED"), "{help}");
+    assert!(help.contains("cannot see what address"), "{help}");
+    assert!(help.contains("0.0.0.0"), "{help}");
 }
 
 #[test]
@@ -387,6 +400,7 @@ mod live {
             vec!["interfaces"],
             vec!["routes"],
             vec!["status", "-v"],
+            vec!["doctor"],
         ] {
             let output = autonet().args(&args).output().unwrap();
             let text = String::from_utf8_lossy(&output.stdout);
@@ -396,5 +410,152 @@ mod live {
                 args.join(" ")
             );
         }
+    }
+
+    #[test]
+    fn doctor_reports_a_checklist_and_never_exits_two_on_a_supported_platform() {
+        // Exit 2 means AutoNet could not do its job. Doctor's job is to
+        // describe a machine, including a broken one, so on a platform with a
+        // backend it should always manage that much.
+        let output = autonet().arg("doctor").output().unwrap();
+        assert_selection_exit(&output);
+
+        let text = stdout_of(&output);
+        for label in [
+            "Operating system",
+            "Network interface",
+            "IPv4 address",
+            "Default route",
+            "Selected address",
+            "LAN reachable",
+            "Bind address",
+        ] {
+            assert!(text.contains(label), "doctor omitted {label:?}: {text}");
+        }
+        // Every row carries one of the four tokens and nothing else.
+        assert!(text.contains("[ ?  ]"), "no unverified row: {text}");
+    }
+
+    #[test]
+    fn doctors_json_carries_every_row_the_text_form_shows() {
+        let text = autonet().arg("doctor").output().unwrap();
+        let json = autonet().args(["doctor", "--json"]).output().unwrap();
+        assert_eq!(text.status.code(), json.status.code());
+
+        let value: Value = serde_json::from_str(stdout_of(&json)).expect("valid JSON");
+        assert_eq!(value["schema_version"], 1);
+        assert_eq!(value["os"], std::env::consts::OS);
+        assert!(value["summary"].as_str().is_some_and(|s| !s.is_empty()));
+
+        let checks = value["checks"].as_array().expect("a checks array");
+        let ids: Vec<&str> = checks
+            .iter()
+            .map(|c| c["id"].as_str().expect("a string id"))
+            .collect();
+        assert!(ids.contains(&"operating_system"), "{ids:?}");
+        assert!(ids.contains(&"bind_address"), "{ids:?}");
+
+        // The labels are what the text form prints, so the two cannot drift.
+        let rendered = stdout_of(&text);
+        for check in checks {
+            let label = check["label"].as_str().expect("a string label");
+            assert!(rendered.contains(label), "text form omits {label:?}");
+        }
+
+        // `ok` is the exit code, restated for a consumer that only reads JSON.
+        assert_eq!(value["ok"], text.status.success());
+    }
+
+    #[test]
+    fn doctor_reports_the_bind_distinction_without_claiming_to_have_checked_it() {
+        let output = autonet().args(["doctor", "--json"]).output().unwrap();
+        let value: Value = serde_json::from_str(stdout_of(&output)).expect("valid JSON");
+
+        let bind = value["checks"]
+            .as_array()
+            .expect("checks")
+            .iter()
+            .find(|c| c["id"] == "bind_address")
+            .expect("a bind_address row");
+
+        // Never anything else. AutoNet cannot see another process's bind().
+        assert_eq!(bind["status"], "unknown");
+        let detail = bind["detail"].as_str().expect("a detail");
+        assert!(detail.contains("cannot see"), "{detail}");
+    }
+
+    #[test]
+    fn doctor_warns_about_a_held_port_without_failing_the_run() {
+        // Same probe `run` makes, and the same verdict: a busy port is a
+        // strong hint, not a fault of this machine.
+        let held = TcpListener::bind("0.0.0.0:0").expect("a wildcard listener");
+        let port = held.local_addr().unwrap().port().to_string();
+
+        let output = autonet()
+            .args(["doctor", "--port", &port, "--json"])
+            .output()
+            .unwrap();
+        assert_selection_exit(&output);
+
+        let value: Value = serde_json::from_str(stdout_of(&output)).expect("valid JSON");
+        let port_row = value["checks"]
+            .as_array()
+            .expect("checks")
+            .iter()
+            .find(|c| c["id"] == "port");
+
+        // Present only when an address was selected to probe against; on a
+        // machine with no address the rows above already say why.
+        if let Some(row) = port_row {
+            assert_eq!(row["label"], format!("Port {port}"));
+            assert_eq!(row["status"], "warn", "{row}");
+            assert_eq!(value["verdict"], "warn");
+            assert_eq!(value["ok"], true, "a busy port must not fail the run");
+            assert!(output.status.success());
+        }
+    }
+
+    #[test]
+    fn doctor_says_nothing_about_a_port_that_is_free() {
+        let port = {
+            let held = TcpListener::bind("127.0.0.1:0").expect("a loopback listener");
+            held.local_addr().unwrap().port()
+        }
+        .to_string();
+
+        let output = autonet()
+            .args(["doctor", "--port", &port, "--json"])
+            .output()
+            .unwrap();
+        assert_selection_exit(&output);
+
+        let value: Value = serde_json::from_str(stdout_of(&output)).expect("valid JSON");
+        if let Some(row) = value["checks"]
+            .as_array()
+            .expect("checks")
+            .iter()
+            .find(|c| c["id"] == "port")
+        {
+            assert_eq!(row["status"], "pass", "a free port produced {row}");
+        }
+    }
+
+    #[test]
+    fn doctor_fails_rather_than_errors_when_it_is_told_to_use_loopback() {
+        // A machine that can only offer 127.0.0.1 is a diagnosis, not a
+        // malfunction: exit 1, and no `autonet:` line on top of the checklist
+        // that already explained it.
+        let output = autonet()
+            .args(["doctor", "--interface", "lo"])
+            .output()
+            .unwrap();
+
+        assert_eq!(output.status.code(), Some(1), "{}", stdout_of(&output));
+        assert!(stdout_of(&output).contains("[fail]"));
+        assert!(
+            output.stderr.is_empty(),
+            "the checklist was duplicated on stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 }

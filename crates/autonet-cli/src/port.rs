@@ -159,7 +159,7 @@ pub fn describe(check: &PortCheck, port: u16) -> Option<String> {
 /// Every variant is phrased, including the ones that decline: a user comparing
 /// output across machines should be told that macOS says less, not left to
 /// infer it from a shorter message.
-fn holder_note(holder: &PortHolder) -> Option<String> {
+pub(crate) fn holder_note(holder: &PortHolder) -> Option<String> {
     match holder {
         PortHolder::Named { pid, name } => Some(format!("It is held by {name} (pid {pid}).")),
         PortHolder::Unnamed { pid } => Some(format!("It is held by pid {pid}.")),

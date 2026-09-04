@@ -25,6 +25,16 @@ impl Theme {
         Self { enabled: false }
     }
 
+    /// A theme that always emits escape codes.
+    ///
+    /// Test-only: the point of it is to prove that styling a cell does not
+    /// disturb the column it sits in, which cannot be checked against a theme
+    /// that paints nothing.
+    #[cfg(test)]
+    pub fn coloured() -> Self {
+        Self { enabled: true }
+    }
+
     /// A field label.
     pub fn label(self, text: &str) -> String {
         self.paint(text, |t| t.dimmed().to_string())

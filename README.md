@@ -78,6 +78,8 @@ on Nix**.
 | `autonet ip` | The bare address and nothing else, for `$(...)` substitution. |
 | `autonet interfaces` | Every interface, classified, with its addresses. |
 | `autonet routes` | The routing table, default routes first. |
+| `autonet run -- <cmd>` | Runs a command with `AUTONET_IP`, `AUTONET_HOST` and `AUTONET_URL` in its environment, and exits with the command's own exit code. The variables are a snapshot taken at launch; see [ADR 0001](docs/adr/0001-network-change-during-autonet-run.md). |
+| `autonet doctor` | A checklist of what works and what does not, in plain language, with a summary line. |
 
 Common flags, accepted before or after any command:
 
@@ -94,6 +96,52 @@ Common flags, accepted before or after any command:
 | `-c, --config <PATH>` | Use this config file. |
 | `-v, --verbose` | Show every candidate, its score, and the rules that produced it. |
 
+### Checking a machine
+
+```console
+$ autonet doctor --port 3000
+AutoNet doctor  linux-netlink
+
+  [ ok ]  Operating system   linux, via linux-netlink
+  [ ok ]  Network interface  wlo1 (wireless, up), and 3 more
+  [ ok ]  IPv4 address       192.168.0.115/24 on wlo1
+  [ ok ]  Default route      via 192.168.0.1 on wlo1
+  [ ok ]  Selected address   192.168.0.115 (private) on wlo1, which is not
+                             loopback
+  [ ok ]  LAN reachable      1 address another device could reach
+  [warn]  Port 3000          already in use on 192.168.0.115. It is held by
+                             python3 (pid 67834).
+  [ ?  ]  Bind address       AutoNet cannot see what address your server
+                             binds. If it binds 192.168.0.115 specifically, it
+                             stops answering when the network changes; if it
+                             binds 0.0.0.0, it follows the change. Check your
+                             program's host or bind setting.
+
+1 warning, nothing failed, 1 not verified. AutoNet can give another device an
+address that reaches this machine.
+```
+
+There are four verdicts, not three:
+
+| | |
+|---|---|
+| `[ ok ]` | Checked, and fine. |
+| `[warn]` | Checked, worth knowing about, not broken. |
+| `[fail]` | Checked, and broken. Exit code `1`. |
+| `[ ?  ]` | **Not checked.** AutoNet did not determine this. Never affects the exit code. |
+
+The fourth exists because a row AutoNet could not verify is not a pass. Calling
+it one would be a tick that means nothing.
+
+**The bind-address row is always `[ ? ]`, and that is deliberate.** AutoNet
+cannot see what address another program passes to `bind()`, and in the ordinary
+case — running `doctor` *before* starting the server — there is no socket to
+look at. So the row explains the distinction and leaves the answer to you: a
+server bound to one specific address stops answering when the network changes,
+and a server bound to the wildcard (`0.0.0.0` or `::`) follows it. It is
+advice, not a measurement, and it is not presented as one. See
+[ADR 0001](docs/adr/0001-network-change-during-autonet-run.md).
+
 ### Scripting
 
 ```sh
@@ -109,9 +157,13 @@ Exit codes:
 
 | Code | Meaning |
 |---|---|
-| `0` | An address was selected. |
-| `1` | Nothing usable — the machine may simply be offline. Not a malfunction. |
+| `0` | An address was selected. For `doctor`, nothing failed — warnings included. For `run`, the command itself exited `0`. |
+| `1` | Nothing usable — the machine may simply be offline. Not a malfunction. For `doctor`, at least one check failed. |
 | `2` | AutoNet could not do its job: the OS could not be queried, the configuration is invalid, or the command asked for something that does not exist. |
+
+`autonet run` otherwise exits with the exit code of the command it ran, which
+may be any value — `autonet run -- make test` returning `2` is the tests
+failing, not AutoNet.
 
 ### Explaining a surprising answer
 

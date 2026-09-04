@@ -7,6 +7,7 @@
 
 mod cli;
 mod commands;
+mod doctor;
 mod port;
 mod render;
 mod spawn;
@@ -39,12 +40,14 @@ enum CliError {
     Usage(String),
     /// A child launched by `run` exited non-zero. Not an AutoNet failure.
     ChildExit(u8),
+    /// `doctor` completed and something failed. The checklist is the message.
+    Unhealthy,
 }
 
 impl CliError {
     fn exit_code(&self) -> u8 {
         match self {
-            Self::NoAddress(_) => exit::NO_ADDRESS,
+            Self::NoAddress(_) | Self::Unhealthy => exit::NO_ADDRESS,
             Self::Platform(_) | Self::Config(_) | Self::Usage(_) => exit::FAILED,
             Self::ChildExit(code) => *code,
         }
@@ -55,13 +58,17 @@ impl CliError {
     /// `ChildExit` deliberately has none. `autonet run -- make test` failing
     /// its tests is the tests failing, and prefixing that with `autonet:`
     /// would blame the launcher for the launched program's verdict.
+    ///
+    /// `Unhealthy` has none for the same reason: the checklist has already
+    /// named every row that failed and said what each one means, and
+    /// `autonet: a check failed` on top of that is noise.
     fn message(&self) -> Option<String> {
         match self {
             Self::NoAddress(reason) => Some(format!("no usable address: {reason}")),
             Self::Platform(error) => Some(error.to_string()),
             Self::Config(error) => Some(error.to_string()),
             Self::Usage(message) => Some(message.clone()),
-            Self::ChildExit(_) => None,
+            Self::ChildExit(_) | Self::Unhealthy => None,
         }
     }
 }
@@ -102,5 +109,6 @@ fn run(cli: &Cli) -> Result<(), CliError> {
         Command::Interfaces => commands::interfaces(&ctx, &cli.global),
         Command::Routes => commands::routes(&ctx, &cli.global),
         Command::Run { command } => spawn::run(&ctx, &cli.global, &command),
+        Command::Doctor => commands::doctor(&ctx, &cli.global),
     }
 }
