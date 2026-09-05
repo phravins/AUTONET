@@ -80,6 +80,7 @@ on Nix**.
 | `autonet routes` | The routing table, default routes first. |
 | `autonet run -- <cmd>` | Runs a command with `AUTONET_IP`, `AUTONET_HOST` and `AUTONET_URL` in its environment, and exits with the command's own exit code. The variables are a snapshot taken at launch; see [ADR 0001](docs/adr/0001-network-change-during-autonet-run.md). |
 | `autonet doctor` | A checklist of what works and what does not, in plain language, with a summary line. |
+| `autonet advertise` | Publishes a `.local` name pointing at the selected address, and re-publishes it whenever the address moves. **This transmits** — it is off until `[hostname] enabled` says otherwise. See [ADR 0002](docs/adr/0002-mdns-advertisement.md). |
 
 Common flags, accepted before or after any command:
 
@@ -181,6 +182,44 @@ $ autonet status -v
 ```
 
 Every verdict is attributable to a named rule. There is no hidden heuristic.
+
+### Being findable by name
+
+An IP address has to be read off one screen and typed into another, and it stops
+being true the moment the laptop moves. A name does not.
+
+```console
+$ autonet advertise --port 3000
+Advertising real0-autonet.local
+  Address   192.168.1.18
+  Service   _http._tcp port 3000
+  Open      http://real0-autonet.local:3000
+
+This machine is now discoverable on the local network. Ctrl-C to stop and withdraw the record.
+```
+
+The name follows the address. Unplug the Ethernet cable and the record is
+re-announced against the Wi-Fi address, through the same change pipeline
+`autonet watch` uses; when nothing is reachable the record is withdrawn rather
+than left pointing somewhere the machine no longer is.
+
+**It transmits, so it is off until you say otherwise.** With `[hostname]
+enabled` unset, `autonet advertise` refuses and prints the two lines to add to
+your configuration file. There is no flag and no environment variable that turns
+it on — consent to publish this machine belongs in a file you wrote.
+
+The published name is `<hostname>-autonet.local`, not `<hostname>.local`. Your
+operating system already owns the latter, and already answers it with *every*
+address on *every* interface — frequently a Docker bridge nobody can reach.
+AutoNet publishes one address, the selected one. Override the name with
+`[hostname] name` or `AUTONET_HOSTNAME`.
+
+What goes on the wire: the name, the selected address, the port, and the service
+type. Nothing else — no interface names, no MAC addresses, no scores. What does
+not: AutoNet advertises only. It never browses, collects, or records what other
+machines on the network are saying. See
+[ADR 0002](docs/adr/0002-mdns-advertisement.md) for the security analysis,
+including what this does *not* protect you from.
 
 ## The JSON contract
 

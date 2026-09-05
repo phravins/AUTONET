@@ -179,13 +179,16 @@ block, and note in the release notes that the file needs the newer binary.
 | M2b | Windows backend — IP Helper (`GetAdaptersAddresses`, `GetIpForwardTable2`) | In progress |
 | M3 | `autonet run` — inject `AUTONET_IP`, `AUTONET_HOST`, `AUTONET_URL` | Planned |
 | M4 | `autonet watch` — network change events | Planned |
+| M4a | `autonet advertise` — a `.local` name for the selected address, re-announced through M4's pipeline | Planned |
 | M5 | Daemon with a local HTTP API over a Unix socket / named pipe | Planned |
 | M6 | Python, TypeScript, Java and .NET SDKs — thin wrappers, never reimplementations | Planned |
 
-Later: `.local` hostnames via mDNS, Docker awareness, QR codes, IDE integration,
-installers.
+Later: Docker awareness, QR codes, IDE integration, installers.
 
 Decisions that constrain a milestone's design, rather than its schedule, are
 recorded in [`adr/`](adr/). M3's process model — whether `autonet run` supervises
 its child or only launches it — is settled by
-[ADR 0001](adr/0001-network-change-during-autonet-run.md).
+[ADR 0001](adr/0001-network-change-during-autonet-run.md). What that record
+deferred to the name layer — the mDNS crate, the `[hostname]` configuration and
+the advertisement's own security analysis — is settled by
+[ADR 0002](adr/0002-mdns-advertisement.md).

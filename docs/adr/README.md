@@ -39,3 +39,4 @@ record listing only advantages is a record whose costs were not examined.
 | # | Title | Status |
 |---|---|---|
 | [0001](0001-network-change-during-autonet-run.md) | What happens when the network changes mid-run | Accepted |
+| [0002](0002-mdns-advertisement.md) | Advertising the selected address as a `.local` name | Accepted |

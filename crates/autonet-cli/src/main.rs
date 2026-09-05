@@ -5,6 +5,7 @@
 #![allow(clippy::must_use_candidate)]
 #![allow(clippy::doc_markdown)]
 
+mod advertise;
 mod cli;
 mod commands;
 mod doctor;
@@ -123,5 +124,6 @@ fn run(cli: &Cli) -> Result<(), CliError> {
         Command::Run { command } => spawn::run(&ctx, &cli.global, &command),
         Command::Watch => watch::watch(&ctx, &cli.global),
         Command::Doctor => commands::doctor(&ctx, &cli.global),
+        Command::Advertise => advertise::advertise(&ctx, &cli.global),
     }
 }

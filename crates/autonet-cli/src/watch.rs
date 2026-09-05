@@ -96,7 +96,7 @@ pub(crate) struct Change<'a> {
 
 impl Change<'_> {
     /// Whether this is the opening report rather than a change.
-    fn is_initial(&self) -> bool {
+    pub(crate) fn is_initial(&self) -> bool {
         self.previous.is_none() && self.diff.is_empty()
     }
 }
@@ -410,7 +410,7 @@ fn describe(selected: Option<&SelectedAddress>) -> String {
 ///
 /// The wording is prose for a human and is not part of the JSON contract; see
 /// `docs/json-schema.md`.
-fn reason(diff: &NetworkDiff) -> Option<String> {
+pub(crate) fn reason(diff: &NetworkDiff) -> Option<String> {
     // `min_by_key` keeps the first of equally-ranked events, and `diff` emits
     // in a stable order, so the same change always produces the same sentence.
     diff.events.iter().min_by_key(|event| rank(event)).map(word)

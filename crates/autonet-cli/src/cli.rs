@@ -181,6 +181,47 @@ not what any program will bind.
 
 Exits 0 when nothing failed, warnings included, and 1 when something did.")]
     Doctor,
+
+    /// Publish a `.local` name pointing at the selected address.
+    ///
+    /// The long help is where the wire behaviour is stated, because this is the
+    /// one command in the tool that transmits anything. A user should be able
+    /// to read exactly what leaves this machine before running it, not after.
+    #[command(long_about = "\
+Publish a .local name for the selected address, and keep it pointed there.
+
+    autonet advertise --port 3000
+
+THIS TRANSMITS. It is the only command that does. AutoNet binds UDP 5353, \
+joins the mDNS multicast groups, and announces four things to every device on \
+the network segment: the name, the selected address, the port, and the service \
+type. Nothing else -- no interface name, no MAC address, no score.
+
+It opens no port for your application and changes no firewall rule. Whatever \
+could reach this machine before can reach it after; the record supplies a NAME \
+for an address the machine was already answering on. What is new is that the \
+machine now names itself, unprompted, to the whole link -- including the \
+hostname it derives that name from.
+
+So it is off by default. Set enabled = true under [hostname] in your config \
+file to turn it on; there is deliberately no environment variable and no flag \
+that does it, because consent to publish belongs in a file you wrote.
+
+The published name is <hostname>-autonet.local, not <hostname>.local. The \
+plain name is already owned by Avahi on most Linux desktops and always by \
+mDNSResponder on macOS, and those responders publish every address on every \
+interface -- which is the problem AutoNet exists to fix, so it must not race \
+them for the same name. Override it with `name` under [hostname].
+
+The record follows the address. When the selected address moves -- Wi-Fi to \
+Ethernet, a VPN coming up, a cable pulled -- the name is re-announced at the \
+new address. That is the half of ADR 0001 that autonet run deliberately does \
+not do: the environment inside a running program stays a launch-time snapshot, \
+and the name is what stays true instead.
+
+When no address is selectable the record is withdrawn rather than left \
+pointing somewhere stale. On Ctrl-C it is withdrawn and the process exits 0.")]
+    Advertise,
 }
 
 /// Flags accepted before or after any subcommand.

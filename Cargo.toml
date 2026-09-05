@@ -26,6 +26,19 @@ clap = { version = "4", features = ["derive", "wrap_help"] }
 # in the CLI, which architecture.md rule 2 forbids. `termination` widens the
 # handler from SIGINT alone to SIGTERM and SIGHUP.
 ctrlc = { version = "3", features = ["termination"] }
+# The machine's own name, for the default `<hostname>-autonet` instance. Reading
+# it by hand is gethostname on Unix and GetComputerNameExW on Windows, i.e.
+# `#[cfg(target_os)]` in the CLI, which architecture.md rule 2 forbids -- the
+# same reasoning as ctrlc above. Its three dependencies are already in the lock.
+hostname = "0.4"
+# `autonet advertise` publishes a `.local` name for the selected address. The
+# alternatives all bind the system responder -- zeroconf and astro-dnssd need
+# Avahi headers on Linux and the Bonjour SDK on Windows, which breaks both the
+# pure-Rust build and flake.nix's network-free sandbox -- and libmdns and
+# searchlight need tokio in the CLI, which has none. mdns-sd is a self-contained
+# pure-Rust responder. `default-features = false` drops its async and logging
+# features, leaving three new transitive crates.
+mdns-sd = { version = "0.21", default-features = false }
 owo-colors = "4"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
