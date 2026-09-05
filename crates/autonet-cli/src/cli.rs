@@ -44,7 +44,7 @@ impl Cli {
     }
 }
 
-/// The M1 command set plus `run` and `doctor`. `watch` arrives in M4.
+/// The M1 command set plus `run`, `doctor` and `watch`.
 #[derive(Debug, Clone, Subcommand)]
 pub enum Command {
     /// Show the selected address and how it was chosen.
@@ -110,6 +110,42 @@ autonet run exits with the exit code of the command it ran.")]
         )]
         command: Vec<String>,
     },
+
+    /// Print the selected address, then print it again whenever it changes.
+    ///
+    /// The long help states the read-only contract, because the obvious next
+    /// question — "so will it restart my server?" — has a deliberate answer
+    /// that the user should not have to discover by waiting for it not to
+    /// happen.
+    #[command(long_about = "\
+Print the selected address now, and print it again every time it changes.
+Runs until you stop it with Ctrl-C.
+
+    autonet watch
+    autonet watch --json
+
+Each change is reported as what it was, what it is, and the single most \
+explanatory reason it moved:
+
+    Previous: wlo1 (wireless) / 192.168.1.20
+    Current:  eno1 (ethernet) / 10.0.0.42
+    Reason:   default ipv4 route moved from wlo1 to eno1
+
+WATCH ONLY OBSERVES. It does not restart anything, does not signal any \
+autonet run process, and does not rewrite any environment. That is a decision, \
+not a missing feature: the environment of a running process cannot be changed \
+from outside it, so the only way to \"update\" a server would be to kill it. \
+See docs/adr/0001-network-change-during-autonet-run.md, and autonet advertise \
+for the way an address change is meant to be absorbed -- at the name layer, \
+where the client resolves it, rather than at the server.
+
+With --json, one document per line, so it can be piped into a program that \
+reads a stream. The `reason` field is prose for a human and is not part of the \
+JSON contract; the `events` array is the machine-readable form of the same \
+thing. See docs/json-schema.md.
+
+Exits 0 when interrupted, because being interrupted is how it is meant to end.")]
+    Watch,
 
     /// Check whether this machine can be reached, and say what is wrong.
     ///

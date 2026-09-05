@@ -10,7 +10,6 @@
 
 use std::process::{Command as StdCommand, ExitStatus};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use autonet_core::select::{select, SelectedAddress};
@@ -18,6 +17,7 @@ use autonet_core::select::{select, SelectedAddress};
 use crate::cli::GlobalArgs;
 use crate::commands::{check_requested_interface, Context};
 use crate::port;
+use crate::signal::install_signal_flag;
 use crate::{exit, CliError};
 
 /// How long the child is given to act on the signal it already received before
@@ -113,25 +113,6 @@ fn env_vars(selected: &SelectedAddress, port: Option<u16>) -> Vec<(&'static str,
     }
 
     vars
-}
-
-/// Arrange for a termination signal to set a flag instead of killing AutoNet.
-///
-/// The default disposition would kill the parent immediately, which loses the
-/// child's exit code — the one thing `autonet run` promises to report. The
-/// child is not signalled from here and does not need to be: a terminal Ctrl-C
-/// is delivered by the operating system to every process in the foreground
-/// group, so the child has already received a real SIGINT and can shut down
-/// gracefully. `std::process::Child::kill` could only send SIGKILL, which it
-/// could not.
-fn install_signal_flag() -> Result<Arc<AtomicBool>, CliError> {
-    let interrupted = Arc::new(AtomicBool::new(false));
-    let flag = Arc::clone(&interrupted);
-
-    ctrlc::set_handler(move || flag.store(true, Ordering::SeqCst))
-        .map_err(|error| CliError::Usage(format!("cannot install a signal handler: {error}")))?;
-
-    Ok(interrupted)
 }
 
 /// Wait for the child, giving it a grace period if a signal it may not have

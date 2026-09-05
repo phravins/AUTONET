@@ -10,7 +10,9 @@ mod commands;
 mod doctor;
 mod port;
 mod render;
+mod signal;
 mod spawn;
+mod watch;
 
 use std::process::ExitCode;
 
@@ -42,11 +44,21 @@ enum CliError {
     ChildExit(u8),
     /// `doctor` completed and something failed. The checklist is the message.
     Unhealthy,
+    /// A streaming command ended for an ordinary reason: the reader closed the
+    /// pipe, or the user pressed Ctrl-C.
+    ///
+    /// Shaped as an error because it travels back up through the same `?` as
+    /// the real ones, but it is not one — exit code zero, nothing on stderr.
+    /// `autonet watch --json | head -3` is a success, not a broken pipe, and
+    /// interrupting a command whose only way to finish is to be interrupted is
+    /// not a failure either.
+    Stopped,
 }
 
 impl CliError {
     fn exit_code(&self) -> u8 {
         match self {
+            Self::Stopped => 0,
             Self::NoAddress(_) | Self::Unhealthy => exit::NO_ADDRESS,
             Self::Platform(_) | Self::Config(_) | Self::Usage(_) => exit::FAILED,
             Self::ChildExit(code) => *code,
@@ -68,7 +80,7 @@ impl CliError {
             Self::Platform(error) => Some(error.to_string()),
             Self::Config(error) => Some(error.to_string()),
             Self::Usage(message) => Some(message.clone()),
-            Self::ChildExit(_) | Self::Unhealthy => None,
+            Self::ChildExit(_) | Self::Unhealthy | Self::Stopped => None,
         }
     }
 }
@@ -109,6 +121,7 @@ fn run(cli: &Cli) -> Result<(), CliError> {
         Command::Interfaces => commands::interfaces(&ctx, &cli.global),
         Command::Routes => commands::routes(&ctx, &cli.global),
         Command::Run { command } => spawn::run(&ctx, &cli.global, &command),
+        Command::Watch => watch::watch(&ctx, &cli.global),
         Command::Doctor => commands::doctor(&ctx, &cli.global),
     }
 }

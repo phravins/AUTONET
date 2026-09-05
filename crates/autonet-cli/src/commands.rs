@@ -589,8 +589,9 @@ fn local_host(family: autonet_core::model::Family) -> &'static str {
 ///
 /// Pretty-printing is deliberately avoided: the output is a wire format for
 /// other programs, one document per line, so `autonet status --json | jq` works
-/// and so `watch` can later stream documents down the same pipe unchanged.
-fn to_json_line(value: &impl Serialize) -> String {
+/// and so `autonet watch --json` streams documents down the same pipe without
+/// the format changing.
+pub(crate) fn to_json_line(value: &impl Serialize) -> String {
     match serde_json::to_string(value) {
         Ok(text) => format!("{text}\n"),
         // Unreachable for the types used here, but an unwrap in the output path
