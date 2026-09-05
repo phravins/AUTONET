@@ -58,6 +58,12 @@ A change that breaks any of the above increments `schema_version`.
 the point of the whole tool: the URL another device can open. They are separate
 fields because conflating them is the mistake AutoNet exists to prevent.
 
+`urls.network` is also exactly what `--qr` encodes, which is why **`--qr` is
+refused with `--json`** (exit 2) rather than adding a field. A `qr` key would be
+a second copy of one fact that can only ever agree with the first, and a picture
+has no place in a machine contract. See
+[ADR 0003](adr/0003-qr-code-contents.md).
+
 ### Failure
 
 ```json

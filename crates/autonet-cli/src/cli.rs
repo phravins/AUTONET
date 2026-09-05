@@ -48,6 +48,27 @@ impl Cli {
 #[derive(Debug, Clone, Subcommand)]
 pub enum Command {
     /// Show the selected address and how it was chosen.
+    ///
+    /// The long help exists for `--qr`, whose two refusals are easier to read
+    /// before running the command than after.
+    #[command(long_about = "\
+Show the selected address, its interface, gateway and scope. The default when \
+no command is given.
+
+With --port, it also prints the URL to open on this machine and the URL to \
+open on another device. With --qr as well, the second of those is printed \
+again as a QR code, so a phone camera can open it without anyone typing an \
+address.
+
+--qr encodes the selected IP address, not a .local name. A name only resolves \
+while `autonet advertise` is running to publish it, and status does not \
+advertise; a code that scans cleanly and then fails to load would be worse \
+than the address it replaced.
+
+--qr needs a port -- from --port or output.default_port -- and says so rather \
+than encoding a URL with no port in it. It is refused with --json, because a \
+QR code is a rendering and the string it encodes is already in that payload as \
+urls.network.")]
     Status,
 
     /// Print only the selected IP address.
@@ -256,6 +277,18 @@ pub struct GlobalArgs {
     /// port rather than refusing to start.
     #[arg(short = 'p', long, global = true, value_name = "PORT")]
     pub port: Option<u16>,
+
+    /// Also print the network URL as a QR code a phone camera can open.
+    ///
+    /// Global for the reason `--port` is: a QR code is URL *rendering*, and
+    /// `autonet --qr` has to work with `status` as the implicit default
+    /// command. `interfaces` and `routes` ignore it exactly as they ignore
+    /// `--port`.
+    ///
+    /// It encodes the selected address, never a `.local` name -- see
+    /// `docs/adr/0003-qr-code-contents.md` and [`crate::url::network_url`].
+    #[arg(long, global = true)]
+    pub qr: bool,
 
     /// Use only this interface, whatever else the machine has.
     #[arg(short = 'i', long, global = true, value_name = "NAME")]

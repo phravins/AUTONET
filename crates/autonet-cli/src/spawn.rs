@@ -109,7 +109,10 @@ fn env_vars(selected: &SelectedAddress, port: Option<u16>) -> Vec<(&'static str,
     // Only with a port. A URL without one would either be wrong or invite the
     // caller to append a port to a string that may already have a colon in it.
     if let Some(port) = port {
-        vars.push(("AUTONET_URL", selected.url(port, "http")));
+        // `None`: `run` publishes no name. ADR 0001 is explicit that this
+        // variable is a launch-time snapshot, and a `.local` name here would
+        // imply a freshness the child does not get.
+        vars.push(("AUTONET_URL", crate::url::network_url(selected, port, None)));
     }
 
     vars

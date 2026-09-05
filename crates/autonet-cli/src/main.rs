@@ -10,9 +10,11 @@ mod cli;
 mod commands;
 mod doctor;
 mod port;
+mod qr;
 mod render;
 mod signal;
 mod spawn;
+mod url;
 mod watch;
 
 use std::process::ExitCode;

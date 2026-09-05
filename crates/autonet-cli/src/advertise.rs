@@ -238,7 +238,11 @@ fn report(ctx: &Context, change: &Change, host: &str, selected: &SelectedAddress
             out,
             "  {}  {}",
             theme.label("Open    "),
-            theme.value(&format!("http://{name}:{port}"))
+            // The only caller that passes a name. The responder is running in
+            // this process, so `<name>.local` is live and is the better answer
+            // than the address behind it -- which is exactly the condition
+            // `url::network_url` documents.
+            theme.value(&crate::url::network_url(selected, port, Some(name)))
         );
         let _ = writeln!(
             out,

@@ -70,6 +70,25 @@ impl Theme {
         self.paint(text, |t| t.bold().to_string())
     }
 
+    /// Black on white, whatever the terminal's own palette is.
+    ///
+    /// The one place AutoNet overrides the user's colours instead of working
+    /// with them, because the reader is a camera rather than a person: a QR
+    /// code only decodes when its dark modules are actually dark, and block
+    /// characters inherit whichever way round the terminal happens to be. See
+    /// [`crate::qr`].
+    pub fn scannable(self, text: &str) -> String {
+        self.paint(text, |t| t.black().on_bright_white().to_string())
+    }
+
+    /// Whether escape codes are being emitted at all.
+    ///
+    /// Exposed for [`crate::qr`] alone, which has to choose a block-character
+    /// polarity in the case where it cannot choose a colour.
+    pub fn is_coloured(self) -> bool {
+        self.enabled
+    }
+
     fn paint(self, text: &str, style: impl Fn(&str) -> String) -> String {
         if self.enabled {
             style(text)

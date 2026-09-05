@@ -40,3 +40,4 @@ record listing only advantages is a record whose costs were not examined.
 |---|---|---|
 | [0001](0001-network-change-during-autonet-run.md) | What happens when the network changes mid-run | Accepted |
 | [0002](0002-mdns-advertisement.md) | Advertising the selected address as a `.local` name | Accepted |
+| [0003](0003-qr-code-contents.md) | What the QR code encodes | Accepted |

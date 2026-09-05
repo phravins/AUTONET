@@ -89,6 +89,7 @@ Common flags, accepted before or after any command:
 | `--json` | Machine-readable output. See [the JSON contract](#the-json-contract). |
 | `-f, --family <ipv4\|ipv6\|any>` | Which family to prefer. Default `ipv4`. |
 | `-p, --port <PORT>` | Also render the URL to open on another device. Defaults to `output.default_port`. A hint about what to *print*, not about what a command will *bind* — `autonet run` warns if it is taken, and starts the command anyway. |
+| `--qr` | Also render the network URL as a QR code a phone camera can read. Needs a port; refused with `--json`, where the payload is already `urls.network`. |
 | `-i, --interface <NAME>` | Use only this interface. |
 | `-x, --exclude <NAME>` | Never use this interface. Repeatable; a trailing `*` matches a prefix. |
 | `--allow-vpn` | Stop penalising VPN tunnels. |
@@ -220,6 +221,58 @@ not: AutoNet advertises only. It never browses, collects, or records what other
 machines on the network are saying. See
 [ADR 0002](docs/adr/0002-mdns-advertisement.md) for the security analysis,
 including what this does *not* protect you from.
+
+### Getting the URL onto a phone
+
+```console
+$ autonet status --qr --port 3000
+AutoNet linux-netlink
+
+  Address    192.168.1.18/24
+  Interface  wlo1 (wireless, up)
+  Gateway    192.168.1.1
+  Scope      private
+
+  Local      http://127.0.0.1:3000
+  Network    http://192.168.1.18:3000  ← open this from another device
+
+  Scan       http://192.168.1.18:3000
+                                 
+                                 
+    █▀▀▀▀▀█  ▀▄█   ██ █▀▀▀▀▀█    
+    █ ███ █  █▀▄▀ ▀▀  █ ███ █    
+    █ ▀▀▀ █ ▄█   ▄▄█▄ █ ▀▀▀ █    
+    ▀▀▀▀▀▀▀ ▀ █▄▀ ▀▄█ ▀▀▀▀▀▀▀    
+    █ ▄▀▄█▀ ▀▄█▄▀▀▄  ▀▄█    ▄    
+    ▄▀▀█  ▀█▀▀▄ █▄█ ▄ █▄▀  ▀▀    
+     ▄▀█ ▄▀ ▄ ▄▄  █▀█▄█▀ █▄▀█    
+    ▀▄▄ █ ▀▀ ▄▄█ ▄ ▄▀▄▄█ ▄▀▄▀    
+    ▀▀  ▀▀▀▀▄▀  ██▀▀█▀▀▀███ ▄    
+    █▀▀▀▀▀█ ▄▀ ▀█ ███ ▀ █▄▄█▀    
+    █ ███ █ ▄█▄▄▀▀ ▄██▀▀█ ▄ ▀    
+    █ ▀▀▀ █  ▄▄ ▀█▄▀▄▀ ▀▀█▀ ▀    
+    ▀▀▀▀▀▀▀ ▀▀▀ ▀ ▀ ▀▀▀▀   ▀▀    
+                                 
+                                 
+```
+
+The code is the `Network` URL and nothing else. `--qr` adds to the output; it
+never replaces it, so everything above is unchanged.
+
+**It encodes the address, not the `.local` name**, even when `[hostname]` is
+enabled. Setting `enabled = true` means this machine *may* advertise; the name
+only resolves while `autonet advertise` is actually running, and `status`
+prints and exits. A code carrying a name nothing is answering would scan
+cleanly and then fail to load, which is worse than the address it replaced.
+
+`--qr` needs a port — a code is only worth scanning if it opens something — and
+is refused with `--json`, where the same string is already `urls.network`.
+
+In a real terminal the code is painted black on white explicitly, so it scans
+whether your theme is light or dark. With `NO_COLOR` set there is no colour to
+force, the block characters have to carry the polarity themselves, and AutoNet
+renders for a dark terminal and says so. See
+[ADR 0003](docs/adr/0003-qr-code-contents.md).
 
 ## The JSON contract
 

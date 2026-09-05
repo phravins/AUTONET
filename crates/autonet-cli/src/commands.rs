@@ -12,7 +12,7 @@ use serde_json::json;
 use crate::cli::GlobalArgs;
 use crate::doctor::{self, Diagnosis, Snapshot};
 use crate::render::{table, Theme};
-use crate::CliError;
+use crate::{qr, url, CliError};
 
 /// Everything a command needs, assembled once in `main`.
 pub struct Context {
@@ -29,6 +29,16 @@ impl Context {
 
 /// Show the selected address, and on failure explain why there wasn't one.
 pub fn status(ctx: &Context, args: &GlobalArgs) -> Result<(), CliError> {
+    // Both `--qr` refusals happen before the snapshot, so a request that cannot
+    // be met costs nothing and says why on its own. Printing the whole report
+    // first and then failing would bury the one line the user needs under
+    // output they did not ask for.
+    let qr_port = if args.qr {
+        Some(check_qr_is_possible(ctx, args)?)
+    } else {
+        None
+    };
+
     let state = ctx.snapshot()?;
     check_requested_interface(ctx, &state)?;
     let selection = select(&state, &ctx.config.selection);
@@ -37,6 +47,11 @@ pub fn status(ctx: &Context, args: &GlobalArgs) -> Result<(), CliError> {
         print!("{}", status_json(ctx, args, &state, &selection));
     } else {
         print!("{}", status_text(ctx, args, &state, &selection));
+        // Appended, never substituted: `--qr` adds a way to read the URL, and
+        // takes nothing away from the report that was already there.
+        if let (Some(selected), Some(port)) = (&selection.selected, qr_port) {
+            print!("{}", status_qr(ctx, selected, port)?);
+        }
     }
 
     // Preserve the report while returning a failing exit code.
@@ -46,6 +61,53 @@ pub fn status(ctx: &Context, args: &GlobalArgs) -> Result<(), CliError> {
         ));
     }
     Ok(())
+}
+
+/// Refuse `--qr` where it cannot mean anything, before any work is done.
+///
+/// Two cases, and neither is a malfunction, so both are `Usage` rather than a
+/// silent no-op. A flag that the user typed and that quietly did nothing is a
+/// worse outcome than an exit code and a sentence.
+///
+/// Returns the port it established, so the rendering path below has no
+/// impossible `None` branch to invent an answer for.
+fn check_qr_is_possible(ctx: &Context, args: &GlobalArgs) -> Result<u16, CliError> {
+    if args.json {
+        return Err(CliError::Usage(
+            "--qr renders a QR code to the terminal, so it has no meaning with \
+             --json. The URL it would encode is already in that payload as \
+             urls.network."
+                .to_string(),
+        ));
+    }
+
+    let Some(port) = args.port(&ctx.config) else {
+        return Err(CliError::Usage(
+            "--qr needs a port: pass --port, or set output.default_port in your \
+             config file. A QR code is only useful if scanning it opens \
+             something, and a URL without a port does not."
+                .to_string(),
+        ));
+    };
+
+    Ok(port)
+}
+
+/// The QR block appended to `status`, with the port [`check_qr_is_possible`]
+/// established.
+fn status_qr(
+    ctx: &Context,
+    selected: &autonet_core::select::SelectedAddress,
+    port: u16,
+) -> Result<String, CliError> {
+    // `None`: `status` publishes no name, so the address is the only host that
+    // is true right now. See `url::network_url` for the swap point.
+    let url = url::network_url(selected, port, None);
+    Ok(format!(
+        "\n{}{}",
+        qr::caption(&url, ctx.theme),
+        qr::render(&url, ctx.theme)?
+    ))
 }
 
 fn status_json(
@@ -65,8 +127,8 @@ fn status_json(
         Some(selected) => {
             if let Some(port) = args.port(&ctx.config) {
                 payload["urls"] = json!({
-                    "local": format!("http://{}:{port}", local_host(selected.family)),
-                    "network": selected.url(port, "http"),
+                    "local": url::local_url(selected.family, port),
+                    "network": url::network_url(selected, port, None),
                 });
             }
         }
@@ -123,15 +185,15 @@ fn status_text(
             out.push('\n');
             let _ = writeln!(
                 out,
-                "  {}  http://{}:{port}",
+                "  {}  {}",
                 theme.label("Local    "),
-                local_host(selected.family)
+                url::local_url(selected.family, port)
             );
             let _ = writeln!(
                 out,
                 "  {}  {}  {}",
                 theme.label("Network  "),
-                theme.value(&selected.url(port, "http")),
+                theme.value(&url::network_url(selected, port, None)),
                 theme.muted("← open this from another device")
             );
         }
@@ -261,11 +323,11 @@ pub fn ip(ctx: &Context, args: &GlobalArgs) -> Result<(), CliError> {
         let mut payload = serde_json::to_value(&selected).unwrap_or_else(|_| json!({}));
         payload["schema_version"] = json!(autonet_core::SCHEMA_VERSION);
         if let Some(port) = args.port(&ctx.config) {
-            payload["url"] = json!(selected.url(port, "http"));
+            payload["url"] = json!(url::network_url(&selected, port, None));
         }
         print!("{}", to_json_line(&payload));
     } else if let Some(port) = args.port(&ctx.config) {
-        println!("{}", selected.url(port, "http"));
+        println!("{}", url::network_url(&selected, port, None));
     } else {
         println!("{}", selected.ip);
     }
@@ -574,15 +636,6 @@ pub(crate) fn check_requested_interface(
     Err(CliError::Usage(format!(
         "no interface named {name:?}. This machine has: {available}"
     )))
-}
-
-/// The address a browser on *this* machine would use, as opposed to the one
-/// AutoNet exists to find.
-fn local_host(family: autonet_core::model::Family) -> &'static str {
-    match family {
-        autonet_core::model::Family::V4 => "127.0.0.1",
-        autonet_core::model::Family::V6 => "[::1]",
-    }
 }
 
 /// Serialize one JSON document followed by a newline.
