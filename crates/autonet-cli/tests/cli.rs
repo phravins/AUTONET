@@ -19,6 +19,7 @@ fn autonet() -> StdCommand {
         "AUTONET_ALLOW_VPN",
         "AUTONET_ALLOW_CONTAINER",
         "AUTONET_ALLOW_LOOPBACK",
+        "AUTONET_HOSTNAME",
     ] {
         command.env_remove(name);
     }

@@ -236,7 +236,18 @@ prefer_interfaces  = []
 [output]
 format       = "text"          # text | json
 default_port = 0             # 0 means none; used by -p when the flag is absent
+
+[hostname]                     # NEW: requires this version or later, see below
+enabled = false                # may this machine advertise itself on the LAN?
+# name  = "laptop-autonet"     # unset derives <hostname>-autonet
+service = "_http._tcp"         # the DNS-SD service type advertised
 ```
+
+The `[hostname]` section is **new**, and because unknown keys are rejected
+rather than ignored, a file containing it will not parse on an older `autonet`
+binary. Sections default when absent, so the reverse — an older file on this
+binary — is fine. See
+[Changing the configuration file](docs/architecture.md#changing-the-configuration-file).
 
 Unknown keys are rejected rather than ignored, so a typo fails loudly instead of
 doing nothing.
@@ -246,7 +257,8 @@ Precedence, lowest to highest:
 1. Built-in defaults
 2. The configuration file
 3. `AUTONET_FAMILY`, `AUTONET_INTERFACE`, `AUTONET_EXCLUDE_INTERFACES`,
-   `AUTONET_ALLOW_VPN`, `AUTONET_ALLOW_CONTAINER`, `AUTONET_ALLOW_LOOPBACK`
+   `AUTONET_ALLOW_VPN`, `AUTONET_ALLOW_CONTAINER`, `AUTONET_ALLOW_LOOPBACK`,
+   `AUTONET_HOSTNAME`
 4. Command-line flags
 
 ## How it decides

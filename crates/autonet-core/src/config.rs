@@ -16,6 +16,8 @@ pub struct Config {
     pub selection: SelectionConfig,
     /// How the CLI renders results.
     pub output: OutputConfig,
+    /// The name this machine answers to on the local link.
+    pub hostname: HostnameConfig,
 }
 
 /// Rules governing address selection.
@@ -84,6 +86,53 @@ pub enum OutputFormat {
     Json,
 }
 
+/// The name this machine advertises on the local link, and whether it does.
+///
+/// Present for mDNS: `autonet advertise` publishes a `.local` name pointing at
+/// the address the selector chose, so a phone can reach this machine without
+/// anyone typing an IP that goes stale the moment the laptop moves. See
+/// `docs/adr/0002-mdns-advertisement.md`.
+///
+/// Separate from [`SelectionConfig`], which decides *which address wins*, and
+/// from [`OutputConfig`], which decides *how it is rendered*. A name this
+/// machine answers to is neither.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct HostnameConfig {
+    /// Whether this machine may advertise itself on the local link.
+    ///
+    /// **Off by default, and deliberately.** Advertising publishes this
+    /// machine's name, chosen address and port to every device on the network
+    /// segment, unprompted. `docs/architecture.md`'s security posture requires
+    /// that any feature making an application LAN-reachable be explicit, so
+    /// this is the single switch that says yes — consulted by `autonet
+    /// advertise`, and by anything later that could advertise without being
+    /// asked directly.
+    pub enabled: bool,
+    /// The instance name to publish, without the `.local` suffix.
+    ///
+    /// Unset derives `<hostname>-autonet` from the machine's own hostname. The
+    /// suffix is not decoration: on most Linux desktops Avahi already owns
+    /// `<hostname>.local`, and on macOS `mDNSResponder` always does. Publishing
+    /// the same name means RFC 6762 conflict resolution either renames this
+    /// record or leaves two racing, and a client then gets the system
+    /// responder's answer — every address on every interface — about half the
+    /// time. That is the failure this tool exists to fix.
+    pub name: Option<String>,
+    /// The DNS-SD service type to advertise, for example `_http._tcp`.
+    pub service: String,
+}
+
+impl Default for HostnameConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            name: None,
+            service: "_http._tcp".to_string(),
+        }
+    }
+}
+
 impl Config {
     /// The default configuration path: `$XDG_CONFIG_HOME/autonet/config.toml`,
     /// then `%APPDATA%\autonet\config.toml`, then
@@ -144,7 +193,14 @@ impl Config {
     ///
     /// Recognised: `AUTONET_FAMILY`, `AUTONET_INTERFACE`,
     /// `AUTONET_EXCLUDE_INTERFACES` (comma-separated), `AUTONET_ALLOW_VPN`,
-    /// `AUTONET_ALLOW_CONTAINER`, `AUTONET_ALLOW_LOOPBACK`.
+    /// `AUTONET_ALLOW_CONTAINER`, `AUTONET_ALLOW_LOOPBACK`, `AUTONET_HOSTNAME`.
+    ///
+    /// There is deliberately **no `AUTONET_ADVERTISE`**. `hostname.enabled` is
+    /// the switch that permits publishing this machine on the LAN, and a
+    /// security-relevant opt-in that can arrive in an inherited environment is
+    /// exactly the "exposes a service as a side effect" shape
+    /// `docs/architecture.md`'s security posture rules out. It is settable from
+    /// the configuration file and nowhere else.
     ///
     /// # Errors
     ///
@@ -173,6 +229,9 @@ impl Config {
         }
         if let Some(v) = parse_bool_env("AUTONET_ALLOW_LOOPBACK")? {
             self.selection.allow_loopback = v;
+        }
+        if let Some(v) = non_empty_env("AUTONET_HOSTNAME") {
+            self.hostname.name = Some(v);
         }
         Ok(())
     }

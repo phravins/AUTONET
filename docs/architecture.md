@@ -133,6 +133,30 @@ changing a type or a meaning, requires a version bump. See
 [`json-schema.md`](json-schema.md). The `every_fixture_round_trips_through_serde`
 test guards the format against accidental drift.
 
+### Changing the configuration file
+
+`config.toml` is a wire format too — a file written by a person under one
+version of AutoNet and read by another. It has no `schema_version`, so the
+rules in [`json-schema.md`](json-schema.md) transpose to it only in part:
+
+| Rule from the JSON contract | Applies to `config.toml`? |
+|---|---|
+| Keys are never removed, retyped, or re-meaninged | Yes. |
+| New optional keys may be added | Yes, provided the section and every key are `#[serde(default)]`, so a file written before them still parses. |
+| *"Parsers must ignore unknown fields"* | **No — deliberately inverted.** `Config` is `#[serde(deny_unknown_fields)]` so a typo fails loudly instead of doing nothing. |
+| A break increments `schema_version` | Not available. The file carries no version stamp. |
+
+The consequence of the last two rows, which is easy to rediscover the hard way:
+**a config file using a new section is a hard parse error on an older
+binary.** Backward compatibility holds — an old file on a new binary is fine,
+because every section defaults. Forward compatibility does not, and there is no
+version to bump to signal it. That is the price of the loud-typo rule and it is
+paid by every section added from here on, `[hostname]` included.
+
+So: add a section, give it a `Default`, document it in the README's example
+block, and note in the release notes that the file needs the newer binary.
+`Config` derives `Eq`, so no floating-point setting may be added.
+
 ## Security posture
 
 - The daemon (M5) will listen on the local machine only.

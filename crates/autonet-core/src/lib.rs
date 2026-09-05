@@ -12,7 +12,7 @@ pub mod event;
 pub mod model;
 pub mod select;
 
-pub use config::{Config, OutputFormat, SelectionConfig};
+pub use config::{Config, HostnameConfig, OutputFormat, SelectionConfig};
 pub use error::{CoreError, Result};
 pub use event::{diff, NetworkDiff, NetworkEvent};
 pub use model::{
