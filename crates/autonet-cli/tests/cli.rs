@@ -541,13 +541,51 @@ mod live {
         }
     }
 
+    /// This machine's loopback interface, named by the kernel's own flag.
+    ///
+    /// Never spelled `lo`. It is `lo` on Linux, `lo0` on macOS and
+    /// `Loopback Pseudo-Interface 1` on Windows, so a literal turns a test
+    /// about *behaviour* into a test about Linux — and on the other two it
+    /// becomes a test of the "no interface named ..." usage error instead,
+    /// which exits 2 and writes to stderr, failing on both counts for reasons
+    /// that have nothing to do with what it set out to check. Asking AutoNet
+    /// for the flag is the same rule the selector follows: classify from what
+    /// the kernel reports, never from a naming pattern.
+    ///
+    /// `None` only when there is no backend to ask, which is the one case
+    /// where this test has nothing to say.
+    fn loopback_interface() -> Option<String> {
+        let output = autonet().args(["interfaces", "--json"]).output().unwrap();
+        if !output.status.success() {
+            return None;
+        }
+
+        let value: Value = serde_json::from_str(stdout_of(&output)).expect("valid JSON");
+        let name = value["interfaces"]
+            .as_array()
+            .expect("an interfaces array")
+            .iter()
+            .find(|i| i["flags"]["loopback"] == true)
+            .and_then(|i| i["name"].as_str())
+            .map(str::to_string);
+
+        // Not a skip. Every platform with a backend has one, and its absence
+        // would be a real finding rather than a reason to stay quiet.
+        assert!(name.is_some(), "no interface carries the loopback flag");
+        name
+    }
+
     #[test]
     fn doctor_fails_rather_than_errors_when_it_is_told_to_use_loopback() {
         // A machine that can only offer 127.0.0.1 is a diagnosis, not a
         // malfunction: exit 1, and no `autonet:` line on top of the checklist
         // that already explained it.
+        let Some(loopback) = loopback_interface() else {
+            return;
+        };
+
         let output = autonet()
-            .args(["doctor", "--interface", "lo"])
+            .args(["doctor", "--interface", &loopback])
             .output()
             .unwrap();
 
