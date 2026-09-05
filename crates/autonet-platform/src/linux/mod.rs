@@ -3,8 +3,10 @@
 //! Chosen over shelling out to `ip -j`, which would depend on iproute2 being
 //! installed and on its JSON staying stable, and over `getifaddrs`, which
 //! reports addresses but not routes. `rtnetlink` also subscribes to netlink
-//! multicast groups, which is what `autonet watch` needs in M4.
+//! multicast groups, which is what `monitor` uses to give `autonet watch`
+//! near-instant change detection instead of a poll.
 
+pub(crate) mod monitor;
 mod netlink;
 pub(crate) mod portowner;
 mod procnet;

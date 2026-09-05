@@ -12,10 +12,15 @@ authors.workspace = true
 autonet-core = { workspace = true }
 thiserror = { workspace = true }
 
+# "time" is for monitor.rs alone: a netlink subscription blocks forever by
+# nature, and both bounds it needs are timers — the caller's ceiling, so Ctrl-C
+# is still answered on a network that never changes, and the short window that
+# coalesces one handover's burst of messages into one wake-up. The snapshot
+# path in netlink.rs uses neither and predates it.
 [target.'cfg(target_os = "linux")'.dependencies]
 rtnetlink = "0.23"
 netlink-packet-route = "0.33"
-tokio = { version = "1", features = ["rt", "net", "macros"] }
+tokio = { version = "1", features = ["rt", "net", "macros", "time"] }
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
 
 # macOS needs no async runtime: getifaddrs and sysctl are ordinary blocking
