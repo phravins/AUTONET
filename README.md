@@ -2,9 +2,22 @@
 
 **The IP address other devices on your network can actually reach.**
 
+Before — the line you edit again every time the network changes:
+
+```diff
+- const API = "http://192.168.1.42:3000";   // office Wi-Fi, Monday
+- const API = "http://192.168.0.115:3000";  // home, Tuesday
+- const API = "http://172.20.10.4:3000";    // phone hotspot, on the train
++ const API = `http://${process.env.AUTONET_IP}:3000`;
+```
+
+After — the address, and the command that keeps it current:
+
 ```console
 $ autonet ip
 192.168.1.101
+
+$ autonet run --port 3000 -- npm run dev    # AUTONET_IP set for the child
 
 $ autonet status --port 3000
 AutoNet linux-netlink
@@ -55,27 +68,74 @@ plausible-looking answer.
 
 ## Install
 
-```sh
-cargo install --path crates/autonet-cli    # installs the `autonet` binary
-```
+One command on every platform, with no package manager to install first.
 
-Or with Nix:
+**Linux and macOS**
 
 ```sh
-nix run github:osworks/autonet -- status
-nix develop                                # dev shell with the pinned toolchain
+curl -fsSL https://raw.githubusercontent.com/phravins/AUTONET/main/scripts/install.sh | sh
 ```
 
-Nix is used for reproducible builds and development environments only. The
-resulting binary is an ordinary native executable with **no runtime dependency
-on Nix**.
+**Windows**, in PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/phravins/AUTONET/main/scripts/install.ps1 | iex
+```
+
+Both do the same thing: work out your platform, download the matching release
+archive, **verify it against the `SHA256SUMS` published with the release before
+extracting anything**, install to a per-user directory, and add that directory
+to your `PATH` if it is not already there. Neither uses `sudo` or asks for
+administrator rights, and neither replaces an existing `autonet` without asking.
+Three environment variables override the defaults:
+
+| Variable | Effect |
+|---|---|
+| `AUTONET_VERSION` | Install this version instead of the latest release. |
+| `AUTONET_INSTALL_DIR` | Install here instead of `/usr/local/bin`, `~/.local/bin` or `%LOCALAPPDATA%\Programs\autonet`. |
+| `AUTONET_FORCE=1` | Replace an existing install without prompting. |
+
+> **The macOS and Windows binaries are not code-signed or notarized.** On macOS
+> that means a binary you download with a *browser* is quarantined by Gatekeeper
+> and will not run until you clear it (`xattr -d com.apple.quarantine`); the
+> installer above uses `curl`, which does not set that attribute, so it normally
+> installs without one. On Windows it means SmartScreen may show an
+> "unrecognised app" warning the first time you run `autonet.exe` — the binary
+> carries no Authenticode signature, which is not the same as anything being
+> wrong with it. Both installers check the published SHA256 before installing
+> anything, and both print the exact command to clear the flag if it is actually
+> set. Code-signing certificates are not in this repository and will not be.
+
+### Other ways
+
+Secondary to the one-liners above; useful if you already live in one of these.
+
+```sh
+cargo install autonet                       # from crates.io, builds from source
+brew install --formula ./packaging/homebrew/autonet.rb
+scoop install https://raw.githubusercontent.com/phravins/AUTONET/main/packaging/scoop/autonet.json
+```
+
+Or with Nix, for reproducible builds and the pinned development toolchain:
+
+```sh
+nix run github:phravins/AUTONET -- status
+nix develop                                 # dev shell with the pinned toolchain
+```
+
+The resulting binary is an ordinary native executable with **no runtime
+dependency on Nix**. To build from a checkout instead:
+
+```sh
+cargo install --path crates/autonet-cli     # the package is named `autonet`
+```
 
 ## Commands
 
 | Command | What it prints |
 |---|---|
 | `autonet status` | The selected address, its interface, gateway and scope. The default when no command is given. |
-| `autonet ip` | The bare address and nothing else, for `$(...)` substitution. |
+| `autonet ip` | The bare address and nothing else, for `$(...)` substitution — or, with `-p`, the URL to open. |
 | `autonet interfaces` | Every interface, classified, with its addresses. |
 | `autonet routes` | The routing table, default routes first. |
 | `autonet run -- <cmd>` | Runs a command with `AUTONET_IP`, `AUTONET_HOST` and `AUTONET_URL` in its environment, and exits with the command's own exit code. The variables are a snapshot taken at launch; see [ADR 0001](docs/adr/0001-network-change-during-autonet-run.md). |
@@ -152,8 +212,9 @@ IP=$(autonet ip) || exit 1
 npm run dev -- --host "$IP"
 ```
 
-`autonet ip` writes exactly one address and a newline to stdout on success.
-Diagnostics always go to stderr, and colour is disabled automatically when
+`autonet ip` writes exactly one line to stdout on success — the address, or
+with `-p/--port` the URL (`http://192.168.1.101:3000`). Diagnostics always go to
+stderr, and colour is disabled automatically when
 stdout is not a terminal (and whenever `NO_COLOR` is set).
 
 Exit codes:
@@ -167,6 +228,30 @@ Exit codes:
 `autonet run` otherwise exits with the exit code of the command it ran, which
 may be any value — `autonet run -- make test` returning `2` is the tests
 failing, not AutoNet.
+
+### Following the network as it changes
+
+```console
+$ autonet watch
+AutoNet linux-netlink
+Watching for address changes as linux-netlink-monitor reports them, and every 30s regardless. Ctrl-C to stop.
+
+Current:  wlo1 (wireless) / 192.168.1.18
+```
+
+It prints the selection immediately, then prints again only when the answer
+actually changes — plug in an Ethernet cable, bring up a VPN, walk out of range.
+The kernel's own change notifications drive it where the platform has them
+(netlink on Linux, `PF_ROUTE` on macOS, `NotifyIpInterfaceChange` on Windows),
+with a 30-second sweep underneath so a missed notification costs half a minute
+rather than the session. `--json` emits one object per line, ready for a pipe:
+
+```console
+$ autonet watch --json
+{"schema_version":1,"source":"linux-netlink-monitor","change":"initial","captured_at":1788863108,"current":{"ip":"192.168.1.18","family":"ipv4","prefix_len":24,"scope":"private","interface":"wlo1","interface_index":3,"interface_kind":"wireless","gateway":"192.168.1.1","score":1415},"previous":null,"reason":null,"events":[]}
+```
+
+This is the same change pipeline `autonet advertise` republishes through.
 
 ### Explaining a surprising answer
 
@@ -338,8 +423,9 @@ prefer_interfaces  = []
 # require_interface = "wlo1"   # omit entirely unless you mean it
 
 [output]
+# Accepted and validated, but nothing reads it yet: use --json per invocation.
 format       = "text"          # text | json
-default_port = 0             # 0 means none; used by -p when the flag is absent
+default_port = 0               # 0 means none; used by -p when the flag is absent
 
 [hostname]                     # NEW: requires this version or later, see below
 enabled = false                # may this machine advertise itself on the LAN?
@@ -410,7 +496,7 @@ answer never depends on the order the kernel happened to enumerate things.
 
 ```
 crates/autonet-core/       model, classification, selection, config, events
-crates/autonet-platform/   NetworkProvider trait + the Linux/netlink backend
+crates/autonet-platform/   NetworkProvider trait + the Linux, macOS and Windows backends
 crates/autonet-cli/        clap commands, text and JSON rendering
 tests/fixtures/            deterministic NetworkState snapshots
 ```
@@ -435,14 +521,19 @@ them agree with each other.
 |---|---|
 | Linux | Implemented and running, via netlink |
 | macOS | Implemented, via SystemConfiguration and `PF_ROUTE` — **not yet verified on hardware** |
-| Windows | In progress (M2b), via the IP Helper API |
+| Windows | Implemented, via the IP Helper API — **not yet verified on hardware** |
 
-macOS's caveat is deliberate and not modesty. That backend was written without
-access to a Mac; CI builds and tests it on `macos-latest`, but that runner has
-no Wi-Fi radio and no VPN, so the two things the backend most needs to get right
-have never been observed. [`docs/milestone-2a-acceptance.md`](docs/milestone-2a-acceptance.md)
-is the checklist that will change this line, and until someone runs it the line
-stays as it is.
+The two caveats are deliberate and not modesty. Both backends were written
+without access to the machine they target. CI builds and tests them on
+`macos-latest` and `windows-latest`, but those runners have no Wi-Fi radio, no
+VPN and no dock — which is to say, none of the conditions the backends most need
+to get right has ever been observed. Two checklists exist to change these lines,
+and until someone runs them the lines stay as they are:
+
+- [`docs/milestone-2a-acceptance.md`](docs/milestone-2a-acceptance.md), with
+  [`scripts/macos-acceptance.sh`](scripts/macos-acceptance.sh)
+- [`docs/milestone-2b-acceptance.md`](docs/milestone-2b-acceptance.md), with
+  [`scripts/windows-acceptance.ps1`](scripts/windows-acceptance.ps1)
 
 Unsupported platforms compile and fail at *runtime* with a clear message, so the
 whole workspace can be built and tested from any machine.
@@ -458,13 +549,18 @@ Shipped:
   cables being unplugged
 - **M4a** `autonet advertise` — a `.local` name for the selected address,
   republished through M4's pipeline when it moves
-- **M4b** `autonet status --qr` — the network URL as a scannable code
+- **M4b** `autonet status --qr` and `autonet advertise --qr` — the URL, or the
+  published name, as a scannable code
+- **M4c** `autonet doctor` — a plain-language checklist of what works and what
+  does not
+- **Stage 4** release archives for five targets, and one-command installers for
+  Linux, macOS and Windows
 
 Built, but not yet signed off on real hardware — these are honest gaps, not
 formalities:
 
 - **M2a** macOS backend — written, awaiting hardware acceptance
-- **M2b** Windows backend — in progress
+- **M2b** Windows backend — written, awaiting hardware acceptance
 - **M4** a real Wi-Fi handover, observed end to end, rather than the synthetic
   interfaces the tests use
 - **M4a** a second device resolving the published `.local` name
@@ -494,4 +590,5 @@ diff <(autonet ip) <(ip route get 1.1.1.1 | grep -oP 'src \K\S+')
 
 ## Licence
 
-MIT OR Apache-2.0.
+MIT OR Apache-2.0, at your option. See [LICENSE-MIT](LICENSE-MIT) and
+[LICENSE-APACHE](LICENSE-APACHE).

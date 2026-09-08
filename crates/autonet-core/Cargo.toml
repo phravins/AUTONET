@@ -9,12 +9,9 @@ repository.workspace = true
 authors.workspace = true
 keywords = ["network", "ip-address", "lan", "routing"]
 categories = ["network-programming"]
-# tests/fixtures.rs reads its corpus from ../../tests/fixtures, which is outside
-# this package and so cannot be in the .crate. Shipping the test without its
-# 15 fixtures would publish a file that fails the moment anyone runs it, and
-# shipping the fixtures would double the download for data that is only
-# meaningful next to the repository's own git history. CI runs them from the
-# workspace, which is the only place they mean anything.
+# tests/fixtures.rs reads its corpus from ../../tests/fixtures, outside this
+# package, so shipping the test without the fixtures would publish a file that
+# fails the moment anyone runs it. CI runs them from the workspace.
 exclude = ["tests"]
 
 [dependencies]

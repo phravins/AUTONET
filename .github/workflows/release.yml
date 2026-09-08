@@ -1,26 +1,19 @@
 name: Release
 
-# Turns a version tag into downloadable binaries for the five targets CI already
-# proves compile. Nothing here is logic; it is packaging, and the only claim it
-# makes is that the binary in the archive is the one this commit builds.
+# Turns a version tag into downloadable binaries for five targets.
 #
-# Separate from ci.yml on purpose. Minting a release needs `contents: write`,
-# and ci.yml runs on pull_request — including from forks. Granting write to a
-# workflow that a stranger can trigger is how release tokens get spent by people
-# who should not have them. Two workflows, two permission sets.
+# Separate from ci.yml on purpose: minting a release needs `contents: write`,
+# and ci.yml runs on pull_request, including from forks.
 #
-# What it does NOT do. It does not sign or notarize anything: the macOS archives
-# are unsigned, so Gatekeeper will quarantine them until the user clears it, and
-# the Windows binary is unsigned too. Signing needs certificates that are not in
-# this repository and should not be. It is worth knowing before telling anyone
-# these are one-click installs.
+# Nothing here is signed or notarized. The macOS and Windows binaries are
+# unsigned, which Gatekeeper and SmartScreen both have opinions about, and the
+# install scripts and README say so.
 
 on:
   push:
     tags: ['v*']
-  # A rehearsal. Running this from the Actions tab builds all five targets and
-  # uploads them as workflow artifacts without creating a release, which is the
-  # only way to exercise the build matrix before committing to a tag.
+  # A rehearsal: builds all five targets and uploads them as workflow
+  # artifacts without creating a release.
   workflow_dispatch:
 
 permissions:
@@ -89,12 +82,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # ubuntu-22.04, not ubuntu-latest. glibc is forward-compatible only:
-          # a binary linked against 2.39 refuses to start on a machine with
-          # 2.35, and Debian 12, RHEL 9 and Raspberry Pi OS bookworm are all
-          # older than ubuntu-latest. Building on the older runner costs
-          # nothing and is the difference between "runs everywhere" and "runs
-          # on this year's distros".
+          # ubuntu-22.04, not ubuntu-latest: glibc is forward-compatible
+          # only, so a binary linked against 2.39 will not start on Debian 12,
+          # RHEL 9 or Raspberry Pi OS bookworm.
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-22.04
             archive: tar.gz
@@ -102,14 +92,24 @@ jobs:
             os: ubuntu-22.04
             archive: tar.gz
             packages: gcc-aarch64-linux-gnu
-          # macos-latest runners are arm64, so this one is a cross build. The
-          # macOS SDK ships both architectures, so it needs no extra linker.
+          # macos-latest runners are arm64, so this one is a cross build; the
+          # macOS SDK ships both architectures and needs no extra linker.
           - target: x86_64-apple-darwin
             os: macos-latest
             archive: tar.gz
+          # Apple Silicon binaries need at least an ad-hoc signature or the
+          # kernel refuses to run them, and stripping after linking is reported
+          # to invalidate it. Nobody here has a Mac to confirm whether cargo's
+          # `strip = true` actually does that, so this target ships unstripped
+          # until someone can check. Deliberately temporary: revert to the
+          # workspace default once a real arm64 Mac has run the artifact.
+          #
+          # Cargo has no per-target profile key, so it goes through RUSTFLAGS
+          # rather than [profile.release].
           - target: aarch64-apple-darwin
             os: macos-latest
             archive: tar.gz
+            rustflags: -C strip=none
           - target: x86_64-pc-windows-msvc
             os: windows-latest
             archive: zip
@@ -130,21 +130,19 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y ${{ matrix.packages }}
 
-      # No Swatinem/rust-cache, unlike ci.yml. A cache hit saves a few minutes
-      # on a workflow that runs a handful of times a year, and in exchange the
-      # artifact people download is built from a state this run did not fully
-      # produce. Release builds are the one place to pay for a clean build.
+      # No Swatinem/rust-cache, unlike ci.yml: the artifact people download
+      # should be built from a state this run produced in full.
       - name: Build
         shell: bash
-        # `--bin autonet` rather than `-p <package>`: the binary name is stable
-        # and the package name is not (Task 2 renames autonet-cli to autonet),
-        # so this line does not need editing when that lands.
+        # `--bin autonet`, not `-p <package>`: the binary name survives package
+        # renames.
+        env:
+          RUSTFLAGS: ${{ matrix.rustflags }}
         run: cargo build --release --locked --target ${{ matrix.target }} --bin autonet
 
-      # There is no optimize-or-strip step here because there is nothing left
-      # for one to do: [profile.release] in Cargo.toml already sets lto,
-      # codegen-units = 1 and strip = true, and `file` on the resulting binary
-      # reports "stripped". Adding `strip` again would be cargo-culting.
+      # No separate strip step: [profile.release] already sets lto,
+      # codegen-units = 1 and strip = true. The one exception is
+      # aarch64-apple-darwin, handled by the matrix above.
       - name: Package (tar.gz)
         if: matrix.archive == 'tar.gz'
         shell: bash
@@ -196,13 +194,12 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
-          # Five jobs uploaded under five names; flatten them into one directory
-          # so a single sha256sum can cover the set.
+          # Flatten five artifact names into one directory so a single
+          # sha256sum can cover the set.
           merge-multiple: true
 
-      # One file over all five archives, not five files of one line each. The
-      # install script fetches SHA256SUMS once and greps it, which is also what
-      # `sha256sum --check` expects to be handed.
+      # One file over all five archives: what the install scripts fetch and
+      # grep, and what `sha256sum --check` expects.
       - name: Checksums
         shell: bash
         working-directory: artifacts
@@ -211,10 +208,9 @@ jobs:
           sha256sum autonet-*.tar.gz autonet-*.zip > SHA256SUMS
           cat SHA256SUMS
 
-      # The preinstalled gh CLI rather than a third-party release action. This
-      # repository depends on actions/checkout and Swatinem/rust-cache and
-      # nothing else; the step that holds a write token is the last place to add
-      # a dependency whose maintainer could change what it does.
+      # The preinstalled gh CLI rather than a third-party action: the step
+      # holding a write token is the last place to add a dependency whose
+      # maintainer could change what it does.
       - name: Create the release
         shell: bash
         env:

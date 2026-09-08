@@ -1,31 +1,22 @@
-# AutoNet, as a Homebrew formula.
+# AutoNet, as a Homebrew formula. Optional: the one-line installer in
+# scripts/install.sh needs no package manager.
 #
-# THE SHA256 VALUES BELOW ARE PLACEHOLDERS. They are sixty-four zeros, which is
-# a well-formed hash that no file will ever have, so `brew install` fails with a
-# mismatch rather than installing something unverified. They cannot be filled in
-# until a release exists, because there is nothing yet to hash: this repository
-# has no tags. After the first `git push --tags`, take them from the release's
-# own SHA256SUMS:
+# THE SHA256 VALUES BELOW ARE PLACEHOLDERS -- sixty-four zeros, well-formed but
+# matching no file, so `brew install` fails rather than installing something
+# unverified. There is nothing to hash yet; this repository has no tags. After
+# the first tag push, fill them in from the release's own checksums:
 #
 #     curl -fsSL https://github.com/phravins/AUTONET/releases/latest/download/SHA256SUMS
 #
-# and paste each line's hash next to the matching filename below. The filenames
-# here are exactly the ones .github/workflows/release.yml produces; if you find
-# yourself editing a filename to make it match, the workflow changed and this
-# file is now wrong in more places than one.
-#
-# There is no tap yet, so this installs from the path:
+# The filenames here are exactly the ones .github/workflows/release.yml
+# produces. No tap exists yet, so this installs from the path:
 #
 #     brew install --formula ./packaging/homebrew/autonet.rb
-#
-# Creating phravins/homebrew-tap would make it `brew install phravins/tap/autonet`;
-# that needs a second repository, which is not something this file can do.
 class Autonet < Formula
   desc "Find the LAN address a service is actually reachable on"
   homepage "https://github.com/phravins/AUTONET"
   version "0.1.0"
-  # Matches the `license = "MIT OR Apache-2.0"` in Cargo.toml, and the
-  # LICENSE-MIT and LICENSE-APACHE files each archive carries.
+  # Matches `license = "MIT OR Apache-2.0"` in Cargo.toml.
   license any_of: ["MIT", "Apache-2.0"]
 
   on_macos do
@@ -50,9 +41,8 @@ class Autonet < Formula
     end
   end
 
-  # Each archive contains one directory, `autonet-<version>-<target>/`, holding
-  # the binary and the two licences. Homebrew descends into a lone top-level
-  # directory on its own, so the binary is simply here.
+  # Each archive holds one directory, `autonet-<version>-<target>/`, and
+  # Homebrew descends into a lone top-level directory on its own.
   def install
     bin.install "autonet"
   end

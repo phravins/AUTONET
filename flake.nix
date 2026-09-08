@@ -28,7 +28,10 @@
         # same binary behaviour.
         autonet = pkgs.rustPlatform.buildRustPackage {
           pname = "autonet";
-          version = "0.1.0";
+          # Read from the manifest rather than repeated here: a second copy of
+          # the version is a second thing to bump on every release, and so a
+          # guaranteed source of drift.
+          version = (builtins.fromTOML (builtins.readFile ./Cargo.toml)).workspace.package.version;
           src = ./.;
 
           cargoLock.lockFile = ./Cargo.lock;

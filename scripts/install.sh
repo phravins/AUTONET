@@ -4,22 +4,13 @@
 #
 #   curl -fsSL https://raw.githubusercontent.com/phravins/AUTONET/main/scripts/install.sh | sh
 #
-# Windows is not handled here; see packaging/scoop/autonet.json.
+# Windows has its own: scripts/install.ps1.
 #
-# Written as POSIX sh on purpose. In `curl ... | sh` the shebang is never read —
-# the interpreter is whatever the user piped to — so `set -o pipefail`, arrays
-# and `[[` are all unavailable no matter what the first line says.
+# POSIX sh on purpose: under `curl ... | sh` the shebang is never read, so the
+# interpreter is whatever the user piped to. No pipefail, no arrays, no `[[`.
 #
-# What it will not do:
-#
-#   * It never calls sudo. AutoNet needs no privileges to run and its installer
-#     should need none either. If /usr/local/bin is not writable it installs to
-#     ~/.local/bin and says so, rather than asking a pipe-to-shell script for
-#     your password.
-#   * It never extracts an archive it has not checksummed. Verification happens
-#     while the download is still in a temporary directory, because a checksum
-#     confirmed after the binary is already on your PATH has confirmed nothing.
-#   * It never overwrites an existing autonet without asking.
+# It never calls sudo, never extracts an archive it has not checksummed, and
+# never overwrites an existing autonet without asking.
 #
 # Environment:
 #
@@ -44,10 +35,9 @@ need() {
 
 # --- what am I running on? ---------------------------------------------------
 #
-# The four Unix triples here are exactly the four that
-# .github/workflows/release.yml builds. Anything else is refused by name rather
-# than guessed at, because the alternative is downloading a 404 page and trying
-# to execute it.
+# These four triples are exactly the four Unix targets release.yml builds.
+# Anything else is refused by name rather than guessed at, because the
+# alternative is downloading a 404 page and trying to execute it.
 detect_target() {
     kernel=$(uname -s)
     machine=$(uname -m)
@@ -55,7 +45,7 @@ detect_target() {
     case "$kernel" in
         Linux)  os="unknown-linux-gnu" ;;
         Darwin) os="apple-darwin" ;;
-        *) err "unsupported operating system: $kernel (AutoNet ships Linux and macOS builds; on Windows use Scoop)" ;;
+        *) err "unsupported operating system: $kernel (AutoNet ships Linux and macOS builds; on Windows use scripts/install.ps1)" ;;
     esac
 
     case "$machine" in
@@ -64,10 +54,9 @@ detect_target() {
         *) err "unsupported architecture: $machine (AutoNet ships x86_64 and aarch64 builds)" ;;
     esac
 
-    # The Linux builds link against glibc. On a musl system — Alpine, and the
-    # many containers built from it — the binary exists, downloads, passes its
-    # checksum and then dies with a confusing "not found" from the loader. Worth
-    # catching here, where the message can say why.
+    # On musl the glibc binary downloads, passes its checksum and then dies with
+    # a confusing "not found" from the loader. Caught here, where the message
+    # can say why.
     if [ "$kernel" = Linux ] && [ ! -e /lib/ld-linux-x86-64.so.2 ] \
        && [ ! -e /lib/ld-linux-aarch64.so.1 ] && [ ! -e /lib64/ld-linux-x86-64.so.2 ]; then
         if ls /lib/ld-musl-* >/dev/null 2>&1; then
@@ -92,10 +81,8 @@ fi
 # --- checksums ---------------------------------------------------------------
 #
 # macOS has no sha256sum and Linux has no shasum, so both spellings are needed.
-# If neither is present the install is abandoned. Installing an unverified
-# binary "just this once" is the failure this whole step exists to prevent, and
-# a fallback that skips it silently would make the earlier verification
-# theatre rather than a guarantee.
+# With neither, the install is abandoned rather than silently skipping the check
+# this whole step exists to perform.
 if have sha256sum; then
     sha256_of() { sha256sum "$1" | cut -d' ' -f1; }
 elif have shasum; then
@@ -112,11 +99,11 @@ main() {
 
     target=$(detect_target)
 
-    # SHA256SUMS is fetched first and does double duty: it is the integrity
-    # check, and — because release.yml puts the version in every filename — it
-    # is also how the version is discovered. GitHub resolves /latest/download/
-    # server-side, so this needs no API call and so cannot be rate-limited, and
-    # there is no second source of truth to disagree with the first.
+    # SHA256SUMS does double duty: it is the integrity check, and — because
+    # release.yml puts the version in every filename — it is also how the
+    # version is discovered. GitHub resolves /latest/download/ server-side, so
+    # this needs no API call, cannot be rate-limited, and leaves no second
+    # source of truth to disagree with the first.
     if [ -n "${AUTONET_VERSION:-}" ]; then
         want=${AUTONET_VERSION#v}
         sums_url="${RELEASES}/download/v${want}/SHA256SUMS"
@@ -136,8 +123,7 @@ main() {
        If this is a fresh repository there may be no release yet; check
        ${RELEASES}"
 
-    # The line for this platform, which also settles the version and the
-    # archive's extension without either being assumed.
+    # The line for this platform, which settles the version too.
     line=$(grep -E "  autonet-.*-${target}\.(tar\.gz|zip)$" "$tmp/SHA256SUMS" | head -n 1) \
         || line=""
     [ -n "$line" ] || err "this release has no build for ${target}.
@@ -163,8 +149,7 @@ $(sed 's/^[0-9a-f]*  /         /' "$tmp/SHA256SUMS")"
     fi
     info "checksum   ok"
 
-    # Only now, with the archive verified, is anything unpacked. The tarballs
-    # release.yml builds contain a single directory named after the archive.
+    # Only now, verified, is anything unpacked.
     tar xzf "$tmp/$archive" -C "$tmp"
     binary="$tmp/autonet-${version}-${target}/autonet"
     [ -f "$binary" ] || err "the archive did not contain autonet where expected (${binary#$tmp/})."
@@ -190,8 +175,8 @@ choose_dir() {
         printf '%s' "$AUTONET_INSTALL_DIR"
         return
     fi
-    # /usr/local/bin only when it is already writable by this user. Making it
-    # writable is a sudo away and this script does not take that step for you.
+    # /usr/local/bin only when it is already writable by this user; making it
+    # writable is a sudo this script does not take for you.
     if [ -d /usr/local/bin ] && [ -w /usr/local/bin ]; then
         printf '%s' /usr/local/bin
         return
@@ -200,20 +185,15 @@ choose_dir() {
     printf '%s' "$HOME/.local/bin"
 }
 
-# `[ -r /dev/tty ]` is not the question. /dev/tty exists and is readable by its
-# permission bits even in a session with no controlling terminal, and the open
-# is what fails there — with a raw "No such device or address" from the shell
-# rather than anything this script could explain. So try the open, both ways
-# round, and let that be the answer.
+# `[ -r /dev/tty ]` is the wrong question: /dev/tty passes its permission bits
+# even with no controlling terminal, and it is the open that fails there. So try
+# the open, both ways round.
 #
-# The subshells are load-bearing, and this is subtle enough to be worth the
-# paragraph. POSIX says a redirection error on a *special* built-in makes the
-# shell exit, and `:` is a special built-in — so `{ : < /dev/tty; } 2>/dev/null`
-# does not evaluate to false when the open fails, it terminates the installer,
-# and the 2>/dev/null hides the reason. bash is lenient here and dash is not,
-# which is the worst combination: on Debian and Ubuntu `/bin/sh` is dash, so
-# `curl | sh` gets the strict one while anyone testing with bash sees it work.
-# Running each open in a subshell confines the exit to the subshell.
+# The subshells are load-bearing. A redirection error on a *special* built-in
+# makes the shell exit, and `:` is one — so `{ : < /dev/tty; } 2>/dev/null`
+# terminates the installer instead of evaluating false, with the redirect hiding
+# why. dash is strict here and bash is not, and `curl | sh` gets dash on Debian
+# and Ubuntu. A subshell confines the exit.
 tty_available() {
     ( : < /dev/tty ) 2>/dev/null && ( : > /dev/tty ) 2>/dev/null
 }
@@ -228,9 +208,8 @@ install_to() {
         if [ "${AUTONET_FORCE:-}" = 1 ]; then
             info "replacing   ${to} (${existing})"
         elif tty_available; then
-            # Read from the terminal, not from stdin: under `curl | sh` stdin is
-            # the script itself, so `read` there would consume the rest of this
-            # file rather than wait for an answer.
+            # Read from the terminal, not stdin: under `curl | sh` stdin is the
+            # script itself, so `read` would eat the rest of this file.
             printf '  %s already exists (%s). Replace it? [y/N] ' "$to" "$existing" > /dev/tty
             read -r reply < /dev/tty || reply=""
             case "$reply" in
@@ -244,8 +223,8 @@ install_to() {
         fi
     fi
 
-    # Copy to a neighbouring name and rename, so that a full disk or a denied
-    # write cannot leave a half-written binary where a working one used to be.
+    # Write beside the target and rename, so a full disk or a denied write
+    # cannot leave a half-written binary where a working one used to be.
     cp "$from" "$to.new" || err "could not write to ${dir}."
     chmod 755 "$to.new"
     mv -f "$to.new" "$to"
@@ -253,35 +232,21 @@ install_to() {
 
 # --- macOS quarantine --------------------------------------------------------
 #
-# AutoNet is not signed and not notarized, so Gatekeeper is a real part of the
-# experience on macOS and worth being straight about.
-#
-# This script does NOT strip the quarantine attribute for you, for two reasons.
-# The first is that in this path there is nothing to strip: com.apple.quarantine
-# is set by applications that opt into it — browsers, Mail, the App Store — and
-# curl and wget do not, so a binary this script downloaded normally arrives
-# unquarantined and `xattr -d` would be a no-op run for superstition.
-#
-# The second is that the case where it IS set is the case where it should not be
-# removed silently: someone downloaded the tarball in a browser. Having a script
-# clear a security attribute without comment is a habit worth not teaching, so
-# the attribute is checked for, and if it is genuinely there the exact command
-# is printed for a person to run deliberately.
+# Printed only when the attribute is actually present. curl and wget do not set
+# com.apple.quarantine — browsers, Mail and the App Store do — so on the normal
+# path there is nothing to say, and saying it anyway is noise in front of every
+# macOS user. The command is printed for a person to run rather than run here:
+# clearing a security attribute silently is a habit worth not teaching.
 quarantine_note() {
     [ "$(uname -s)" = Darwin ] || return 0
+    have xattr || return 0
+    xattr -p com.apple.quarantine "$1" >/dev/null 2>&1 || return 0
     say ""
-    if have xattr && xattr -p com.apple.quarantine "$1" >/dev/null 2>&1; then
-        say "  This binary is quarantined by Gatekeeper, and macOS will refuse to run"
-        say "  it until that is cleared. AutoNet is not signed or notarized, so this"
-        say "  is expected rather than a sign that something is wrong. To clear it:"
-        say ""
-        say "      xattr -d com.apple.quarantine $1"
-    else
-        say "  Note: AutoNet is not signed or notarized. Nothing is quarantined here,"
-        say "  because curl does not set that attribute — but if you ever download a"
-        say "  release tarball with a browser instead, macOS will block it until you"
-        say "  run:  xattr -d com.apple.quarantine /path/to/autonet"
-    fi
+    say "  This binary is quarantined by Gatekeeper, and macOS will refuse to run"
+    say "  it until that is cleared. AutoNet is not signed or notarized, so this"
+    say "  is expected rather than a sign that something is wrong. To clear it:"
+    say ""
+    say "      xattr -d com.apple.quarantine $1"
 }
 
 # --- PATH --------------------------------------------------------------------

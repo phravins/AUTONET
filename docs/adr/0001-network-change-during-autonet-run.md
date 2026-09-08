@@ -43,6 +43,16 @@ mistake it for the reason behind the decision.
 no IPC crate. Any option needing a server is a step change in the dependency
 posture, not an increment.
 
+> **Drift note, 2026-09-08.** The list above is the dependency set as of
+> 2026-09-03 and is left as written, per the immutability rule in
+> [the ADR README](README.md). It is no longer current: `anyhow` was declared
+> but never used in any `src/`, and was removed in Stage 4; `ctrlc`, `hostname`,
+> `mdns-sd` and `qrcode` were added by M3, M4a and M4b. `tokio` now appears in
+> `Cargo.lock` as a transitive dependency of `mdns-sd` on Linux, so "no tokio"
+> is true of what AutoNet chose and no longer true of what it links. **None of
+> this changes the decision.** The argument was that a server-shaped option is a
+> step change in dependency posture, and nothing since has taken that step.
+
 **There is no signal handling.** `main() -> ExitCode` in
 [`main.rs`](../../crates/autonet-cli/src/main.rs) dispatches a command and
 returns. No `ctrlc`, no `signal-hook`. An option that supervises a child has to

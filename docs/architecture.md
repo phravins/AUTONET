@@ -121,7 +121,7 @@ says what moved. Keeping the payload out of the trait is what stops a backend
 becoming a second, divergent account of the network, and it is why an event
 source can only change *when* the pipeline runs, never *what it concludes*.
 
-### `autonet-cli`
+### `autonet-cli` (the package is named `autonet`)
 
 Parses flags, layers configuration, takes a snapshot, asks the core, renders.
 `commands.rs` holds one function per command, with the ones that outgrew a

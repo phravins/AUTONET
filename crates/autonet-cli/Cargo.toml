@@ -7,23 +7,18 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-# crates.io allows five keywords. These are what someone with the problem would
-# actually type into the search box, which is not the same as what the crate
+# What someone with the problem would search for, which is not what the crate
 # calls itself: nobody searches for "autonet".
 keywords = ["network", "ip-address", "lan", "mdns", "cli"]
 categories = ["command-line-utilities", "network-programming"]
-# Relative to this manifest, so the crates.io front page shows the same README
-# the repository does rather than a second one that drifts from it.
+# Relative to this manifest, so crates.io shows the repository's own README
+# rather than a second one that drifts from it.
 readme = "../../README.md"
 
-# The package, the binary and the crates.io name are all `autonet`, so
-# `cargo install autonet` gets you a binary called `autonet`. The directory is
-# still `crates/autonet-cli`, which reads better next to `autonet-core` and
-# `autonet-platform` and is invisible to anyone installing the tool.
-#
-# This `[[bin]]` block is therefore now redundant -- cargo would infer the same
-# thing from src/main.rs -- but it is kept because it is the line that pins the
-# binary name, and `.github/workflows/release.yml` builds `--bin autonet`.
+# Package, binary and crates.io name are all `autonet`; the directory stays
+# `crates/autonet-cli` to read well beside autonet-core and autonet-platform.
+# Cargo would infer this block from src/main.rs, but it is what pins the binary
+# name that release.yml builds with `--bin autonet`.
 [[bin]]
 name = "autonet"
 path = "src/main.rs"
@@ -31,7 +26,6 @@ path = "src/main.rs"
 [dependencies]
 autonet-core = { workspace = true }
 autonet-platform = { workspace = true }
-anyhow = { workspace = true }
 clap = { workspace = true }
 ctrlc = { workspace = true }
 hostname = { workspace = true }

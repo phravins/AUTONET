@@ -11,10 +11,8 @@ version = "0.1.0"
 edition = "2021"
 rust-version = "1.82"
 license = "MIT OR Apache-2.0"
-# Both point at the real remote. This said `osworks/autonet` from the first
-# commit, which resolves to nothing -- harmless while the only install method
-# was `--path`, and a 404 for every crates.io visitor and every install script
-# the moment anything is published.
+# The real remote. This said `osworks/autonet` until Stage 4, which resolves
+# to nothing.
 repository = "https://github.com/phravins/AUTONET"
 homepage = "https://github.com/phravins/AUTONET"
 authors = ["AutoNet contributors"]
@@ -23,7 +21,6 @@ authors = ["AutoNet contributors"]
 autonet-core = { path = "crates/autonet-core", version = "0.1.0" }
 autonet-platform = { path = "crates/autonet-platform", version = "0.1.0" }
 
-anyhow = "1"
 clap = { version = "4", features = ["derive", "wrap_help"] }
 # `autonet run` must survive the signal that stops its child, so it can reap the
 # child and report the child's own exit code. Doing that by hand would mean
