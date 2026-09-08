@@ -101,13 +101,10 @@ fn status_qr(
     port: u16,
 ) -> Result<String, CliError> {
     // `None`: `status` publishes no name, so the address is the only host that
-    // is true right now. See `url::network_url` for the swap point.
+    // is true right now. See `url::network_url` for the swap point, and
+    // `advertise` for the one caller standing on the other side of it.
     let url = url::network_url(selected, port, None);
-    Ok(format!(
-        "\n{}{}",
-        qr::caption(&url, ctx.theme),
-        qr::render(&url, ctx.theme)?
-    ))
+    Ok(format!("\n{}", qr::block(&url, ctx.theme)?))
 }
 
 fn status_json(

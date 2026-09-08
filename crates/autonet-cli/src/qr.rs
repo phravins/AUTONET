@@ -32,6 +32,20 @@ use qrcode::{EcLevel, QrCode};
 use crate::render::Theme;
 use crate::CliError;
 
+/// The whole block as it appears in output: the caption, then the code.
+///
+/// The one place either is assembled. `status` and `advertise` encode different
+/// URLs — an address and a `.local` name — and that difference belongs entirely
+/// to [`crate::url::network_url`]. Everything downstream of it is identical, so
+/// it is written once here rather than twice at the call sites.
+///
+/// # Errors
+///
+/// Whatever [`render`] returns.
+pub(crate) fn block(url: &str, theme: Theme) -> Result<String, CliError> {
+    Ok(format!("{}{}", caption(url, theme), render(url, theme)?))
+}
+
 /// Render `url` as a scannable block-character QR code, newline-terminated.
 ///
 /// # Errors

@@ -278,15 +278,20 @@ pub struct GlobalArgs {
     #[arg(short = 'p', long, global = true, value_name = "PORT")]
     pub port: Option<u16>,
 
-    /// Also print the network URL as a QR code a phone camera can open.
+    /// Also print the URL as a QR code a phone camera can open.
     ///
     /// Global for the reason `--port` is: a QR code is URL *rendering*, and
     /// `autonet --qr` has to work with `status` as the implicit default
     /// command. `interfaces` and `routes` ignore it exactly as they ignore
     /// `--port`.
     ///
-    /// It encodes the selected address, never a `.local` name -- see
-    /// `docs/adr/0003-qr-code-contents.md` and [`crate::url::network_url`].
+    /// Under `status` it encodes the selected address and never a `.local`
+    /// name, because nothing answers that name unless `advertise` is running
+    /// -- see `docs/adr/0003-qr-code-contents.md`. Under `advertise`
+    /// something is, so there it encodes the published name, and the code
+    /// outlives an address change rather than being invalidated by one. Both
+    /// paths go through [`crate::url::network_url`], which is the one place
+    /// that choice is made.
     #[arg(long, global = true)]
     pub qr: bool,
 

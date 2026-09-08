@@ -81,6 +81,19 @@ pub fn advertise(ctx: &Context, args: &GlobalArgs) -> Result<(), CliError> {
         ));
     };
 
+    // Refused here, before the responder starts, for the same reason `status`
+    // refuses it before the snapshot: a request that cannot be met should cost
+    // nothing and say so on its own, not arrive underneath a record that is
+    // already on the wire. The port case above needs no equivalent — it fires
+    // first, and it is the same refusal.
+    if args.qr && args.json {
+        return Err(CliError::Usage(
+            "--qr renders a QR code to the terminal, so it has no meaning with \
+             --json."
+                .to_string(),
+        ));
+    }
+
     let name = instance_name(config);
     let host = format!("{name}.local.");
 
@@ -99,7 +112,7 @@ pub fn advertise(ctx: &Context, args: &GlobalArgs) -> Result<(), CliError> {
             daemon
                 .register(info)
                 .map_err(|e| CliError::Usage(format!("could not publish {name}.local: {e}")))?;
-            report(ctx, change, &host, selected, port);
+            report(ctx, args, change, &host, selected, port)?;
             published = Some(fullname);
         } else {
             // No usable address means the honest record is no record. Leaving
@@ -210,7 +223,34 @@ fn service_info(
 /// this machine discoverable should not be quiet about having done it. Later
 /// blocks say what moved, so the operator can see the re-advertisement happen
 /// rather than trusting that it did.
-fn report(ctx: &Context, change: &Change, host: &str, selected: &SelectedAddress, port: u16) {
+///
+/// # Why `--qr` is rendered once and never again
+///
+/// Because the URL does not change. The code encodes `<name>.local`, and the
+/// whole point of the name is that it survives the address moving underneath
+/// it — so re-rendering after a handover would redraw an identical code and
+/// bury the one line that actually said something.
+///
+/// That is also the property `status --qr` cannot offer, and the reason this
+/// is the more useful of the two: a code scanned here keeps working across the
+/// Wi-Fi switch that invalidates one carrying a bare address. It is
+/// [ADR 0001](../../../docs/adr/0001-network-change-during-autonet-run.md)'s
+/// staleness argument arriving in someone's hand.
+///
+/// # Errors
+///
+/// Returns [`CliError::Usage`] if the URL will not fit in a QR code. Only
+/// reachable through an absurdly long configured `name`, and reported rather
+/// than ignored because a `--qr` that silently printed nothing would be the
+/// defect this flag was added to fix.
+fn report(
+    ctx: &Context,
+    args: &GlobalArgs,
+    change: &Change,
+    host: &str,
+    selected: &SelectedAddress,
+    port: u16,
+) -> Result<(), CliError> {
     let theme = ctx.theme;
     let name = host.trim_end_matches('.');
     let mut out = String::new();
@@ -234,16 +274,17 @@ fn report(ctx: &Context, change: &Change, host: &str, selected: &SelectedAddress
             theme.label("Service "),
             theme.value(&format!("{} port {port}", ctx.config.hostname.service))
         );
-        let _ = writeln!(
-            out,
-            "  {}  {}",
-            theme.label("Open    "),
-            // The only caller that passes a name. The responder is running in
-            // this process, so `<name>.local` is live and is the better answer
-            // than the address behind it -- which is exactly the condition
-            // `url::network_url` documents.
-            theme.value(&crate::url::network_url(selected, port, Some(name)))
-        );
+        // The only caller that passes a name. The responder is running in this
+        // process, so `<name>.local` is live and is the better answer than the
+        // address behind it -- which is exactly the condition
+        // `url::network_url` documents. The QR code below encodes this same
+        // string, so the swap point is exercised rather than described.
+        let url = crate::url::network_url(selected, port, Some(name));
+        let _ = writeln!(out, "  {}  {}", theme.label("Open    "), theme.value(&url));
+        if args.qr {
+            let _ = writeln!(out);
+            out.push_str(&crate::qr::block(&url, theme)?);
+        }
         let _ = writeln!(
             out,
             "\n{}",
@@ -265,6 +306,7 @@ fn report(ctx: &Context, change: &Change, host: &str, selected: &SelectedAddress
     }
 
     let _ = std::io::stdout().write_all(out.as_bytes());
+    Ok(())
 }
 
 /// Say the record was pulled, and why.
