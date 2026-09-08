@@ -1,0 +1,228 @@
+name: Release
+
+# Turns a version tag into downloadable binaries for the five targets CI already
+# proves compile. Nothing here is logic; it is packaging, and the only claim it
+# makes is that the binary in the archive is the one this commit builds.
+#
+# Separate from ci.yml on purpose. Minting a release needs `contents: write`,
+# and ci.yml runs on pull_request — including from forks. Granting write to a
+# workflow that a stranger can trigger is how release tokens get spent by people
+# who should not have them. Two workflows, two permission sets.
+#
+# What it does NOT do. It does not sign or notarize anything: the macOS archives
+# are unsigned, so Gatekeeper will quarantine them until the user clears it, and
+# the Windows binary is unsigned too. Signing needs certificates that are not in
+# this repository and should not be. It is worth knowing before telling anyone
+# these are one-click installs.
+
+on:
+  push:
+    tags: ['v*']
+  # A rehearsal. Running this from the Actions tab builds all five targets and
+  # uploads them as workflow artifacts without creating a release, which is the
+  # only way to exercise the build matrix before committing to a tag.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  # The cross linker for the one target that needs one. Cargo reads
+  # CARGO_TARGET_<TRIPLE>_LINKER only when building that triple, so setting it
+  # unconditionally is inert on the other four rather than something to gate.
+  CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+
+# Deliberately no `RUSTFLAGS: -D warnings` here, unlike ci.yml. The toolchain
+# channel floats on stable, so a lint added in a Rust release published after
+# the code was written would turn a tagged release into a failed one. Warnings
+# are CI's job, on every push, where a red build costs nothing. A release is the
+# wrong moment to discover a new clippy lint.
+
+jobs:
+  # Cheap, and first, because the failure it catches is the expensive one:
+  # tagging v0.2.0 against a manifest that still says 0.1.0 produces five
+  # archives named after a version that does not exist in the source.
+  verify:
+    name: Version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.manifest.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read the version, and check the tag agrees
+        id: manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Scoped to the [workspace.package] section: an unscoped grep for
+          # `version =` would match the path dependencies a few lines below.
+          version=$(sed -n '/^\[workspace\.package\]/,/^\[/{s/^version = "\(.*\)"/\1/p;}' Cargo.toml)
+          if [ -z "$version" ]; then
+            echo "::error::No version found in [workspace.package] in Cargo.toml"
+            exit 1
+          fi
+          echo "manifest version: $version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+          # workflow_dispatch has no tag to compare against, and that is fine —
+          # the rehearsal is allowed to run from a branch.
+          if [ "${GITHUB_REF_TYPE}" != "tag" ]; then
+            echo "Ref is ${GITHUB_REF_TYPE} ${GITHUB_REF_NAME}, not a tag; skipping the comparison."
+            exit 0
+          fi
+          tag=${GITHUB_REF_NAME#v}
+          if [ "$tag" != "$version" ]; then
+            echo "::error::Tag ${GITHUB_REF_NAME} does not match Cargo.toml version ${version}."
+            exit 1
+          fi
+          echo "tag ${GITHUB_REF_NAME} matches."
+
+  build:
+    name: ${{ matrix.target }}
+    needs: verify
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # Same reasoning as ci.yml: "does this fail on one target or all five?" is
+      # unanswerable if the first red job cancels the rest.
+      fail-fast: false
+      matrix:
+        include:
+          # ubuntu-22.04, not ubuntu-latest. glibc is forward-compatible only:
+          # a binary linked against 2.39 refuses to start on a machine with
+          # 2.35, and Debian 12, RHEL 9 and Raspberry Pi OS bookworm are all
+          # older than ubuntu-latest. Building on the older runner costs
+          # nothing and is the difference between "runs everywhere" and "runs
+          # on this year's distros".
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-22.04
+            archive: tar.gz
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-22.04
+            archive: tar.gz
+            packages: gcc-aarch64-linux-gnu
+          # macos-latest runners are arm64, so this one is a cross build. The
+          # macOS SDK ships both architectures, so it needs no extra linker.
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            archive: tar.gz
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            archive: tar.gz
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            archive: zip
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the pinned toolchain
+        shell: bash
+        run: |
+          rustup show active-toolchain || rustup toolchain install
+          rustup target add ${{ matrix.target }}
+          rustc --version && cargo --version
+
+      - name: Install the cross linker
+        if: matrix.packages != ''
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ${{ matrix.packages }}
+
+      # No Swatinem/rust-cache, unlike ci.yml. A cache hit saves a few minutes
+      # on a workflow that runs a handful of times a year, and in exchange the
+      # artifact people download is built from a state this run did not fully
+      # produce. Release builds are the one place to pay for a clean build.
+      - name: Build
+        shell: bash
+        # `--bin autonet` rather than `-p <package>`: the binary name is stable
+        # and the package name is not (Task 2 renames autonet-cli to autonet),
+        # so this line does not need editing when that lands.
+        run: cargo build --release --locked --target ${{ matrix.target }} --bin autonet
+
+      # There is no optimize-or-strip step here because there is nothing left
+      # for one to do: [profile.release] in Cargo.toml already sets lto,
+      # codegen-units = 1 and strip = true, and `file` on the resulting binary
+      # reports "stripped". Adding `strip` again would be cargo-culting.
+      - name: Package (tar.gz)
+        if: matrix.archive == 'tar.gz'
+        shell: bash
+        run: |
+          set -euo pipefail
+          stem="autonet-${{ needs.verify.outputs.version }}-${{ matrix.target }}"
+          mkdir "$stem"
+          cp "target/${{ matrix.target }}/release/autonet" "$stem/"
+          cp README.md LICENSE-MIT LICENSE-APACHE "$stem/"
+          tar czf "$stem.tar.gz" "$stem"
+          ls -l "$stem.tar.gz"
+
+      # A flat zip, with no wrapping directory: Scoop's `bin` entry names the
+      # executable at the archive root, and Windows users unzipping by hand
+      # expect the same. The Unix archives keep their directory because `tar xf`
+      # into a home directory should not scatter three files across it.
+      - name: Package (zip)
+        if: matrix.archive == 'zip'
+        shell: pwsh
+        run: |
+          $stem = "autonet-${{ needs.verify.outputs.version }}-${{ matrix.target }}"
+          $files = @(
+            "target/${{ matrix.target }}/release/autonet.exe",
+            "README.md",
+            "LICENSE-MIT",
+            "LICENSE-APACHE"
+          )
+          Compress-Archive -Path $files -DestinationPath "$stem.zip"
+          Get-Item "$stem.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: autonet-*.${{ matrix.archive }}
+          if-no-files-found: error
+
+  release:
+    name: Publish
+    needs: [verify, build]
+    # The rehearsal stops here. workflow_dispatch runs the matrix and leaves the
+    # archives as workflow artifacts; only a tag mints a release.
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          # Five jobs uploaded under five names; flatten them into one directory
+          # so a single sha256sum can cover the set.
+          merge-multiple: true
+
+      # One file over all five archives, not five files of one line each. The
+      # install script fetches SHA256SUMS once and greps it, which is also what
+      # `sha256sum --check` expects to be handed.
+      - name: Checksums
+        shell: bash
+        working-directory: artifacts
+        run: |
+          set -euo pipefail
+          sha256sum autonet-*.tar.gz autonet-*.zip > SHA256SUMS
+          cat SHA256SUMS
+
+      # The preinstalled gh CLI rather than a third-party release action. This
+      # repository depends on actions/checkout and Swatinem/rust-cache and
+      # nothing else; the step that holds a write token is the last place to add
+      # a dependency whose maintainer could change what it does.
+      - name: Create the release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          ls -l artifacts
+          gh release create "$GITHUB_REF_NAME" \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes \
+            artifacts/*

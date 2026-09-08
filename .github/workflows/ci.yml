@@ -68,3 +68,15 @@ jobs:
 
       - name: Test
         run: cargo test --workspace
+
+      # The fifth release target, which no other job covers: the three runners
+      # above are all x86_64 or Apple ARM, so nothing here would otherwise
+      # compile for 64-bit ARM Linux until a tag did it for the first time.
+      # `check` and not `build`, because linking needs a cross linker and the
+      # point is to catch a #[cfg] arm that does not compile, not to produce an
+      # artifact — release.yml installs the linker and does the real build.
+      - name: Check aarch64-unknown-linux-gnu
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          rustup target add aarch64-unknown-linux-gnu
+          cargo clippy --workspace --all-targets --target aarch64-unknown-linux-gnu -- -D warnings

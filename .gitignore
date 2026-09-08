@@ -19,3 +19,12 @@ result-*
 .vscode/
 *.swp
 .DS_Store
+
+# Release archives, when the packaging steps in .github/workflows/release.yml
+# are rehearsed by hand. They are build output that happens to land in the
+# repository root rather than under target/, and a stray 4 MB binary is an easy
+# thing to commit by accident.
+/autonet-*.tar.gz
+/autonet-*.zip
+/autonet-*-*/
+/SHA256SUMS
