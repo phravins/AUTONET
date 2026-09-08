@@ -138,7 +138,7 @@ cargo install --path crates/autonet-cli     # the package is named `autonet`
 | `autonet ip` | The bare address and nothing else, for `$(...)` substitution — or, with `-p`, the URL to open. |
 | `autonet interfaces` | Every interface, classified, with its addresses. |
 | `autonet routes` | The routing table, default routes first. |
-| `autonet run -- <cmd>` | Runs a command with `AUTONET_IP`, `AUTONET_HOST` and `AUTONET_URL` in its environment, and exits with the command's own exit code. The variables are a snapshot taken at launch; see [ADR 0001](docs/adr/0001-network-change-during-autonet-run.md). |
+| `autonet run -- <cmd>` | Runs a command with `AUTONET_IP`, `AUTONET_HOST` and `AUTONET_URL` in its environment, and exits with the command's own exit code. The variables are a snapshot taken at launch; see [ADR 0001](docs/adr/0001-network-change-during-autonet-run.md). With `--state-file <path>` it also keeps the current selection in a file the command can re-read — see [staying live across a network change](#staying-live-across-a-network-change). |
 | `autonet doctor` | A checklist of what works and what does not, in plain language, with a summary line. |
 | `autonet watch` | Prints the selected address, then prints it again each time it changes. Reads the kernel's own change notifications where the platform has them, and falls back to a timer where it does not. |
 | `autonet advertise` | Publishes a `.local` name pointing at the selected address, and re-publishes it whenever the address moves. **This transmits** — it is off until `[hostname] enabled` says otherwise. See [ADR 0002](docs/adr/0002-mdns-advertisement.md). |
@@ -251,7 +251,73 @@ $ autonet watch --json
 {"schema_version":1,"source":"linux-netlink-monitor","change":"initial","captured_at":1788863108,"current":{"ip":"192.168.1.18","family":"ipv4","prefix_len":24,"scope":"private","interface":"wlo1","interface_index":3,"interface_kind":"wireless","gateway":"192.168.1.1","score":1415},"previous":null,"reason":null,"events":[]}
 ```
 
-This is the same change pipeline `autonet advertise` republishes through.
+This is the same change pipeline `autonet advertise` republishes through, and
+the same one `autonet run --state-file` writes from.
+
+### Staying live across a network change
+
+**Almost nothing needs this.** `AUTONET_IP`, `AUTONET_HOST` and `AUTONET_URL`
+are enough for the ordinary case, and a program that binds `0.0.0.0` or `::` is
+unaffected by a network change anyway. Read this section only if you have a
+long-running program that prints, embeds or advertises the address and must
+notice when it moves *without being restarted*.
+
+The three variables are a snapshot taken at launch and cannot be anything else:
+the environment of a running process cannot be rewritten from outside it. So
+AutoNet offers a second, opt-in channel instead — a file it keeps current, which
+your program re-reads whenever it likes:
+
+```sh
+autonet run --state-file .autonet/current.json --port 3000 -- npm run dev
+```
+
+The child gets `AUTONET_STATE_FILE` alongside the usual three, holding the
+absolute path. The file contains exactly the document `autonet status --json`
+prints:
+
+```json
+{"schema_version":1,"platform":"linux-netlink","captured_at":1788865120,"selected":{"ip":"192.168.1.18","family":"ipv4","prefix_len":24,"scope":"private","interface":"wlo1","interface_index":3,"interface_kind":"wireless","gateway":"192.168.1.1","score":1415},"urls":{"local":"http://127.0.0.1:3000","network":"http://192.168.1.18:3000"}}
+```
+
+Reading it, in the shape most languages already have:
+
+```js
+const { readFileSync } = require("node:fs");
+
+function currentAddress() {
+  const path = process.env.AUTONET_STATE_FILE;
+  // No file: this process was launched without --state-file, or AutoNet has
+  // stopped. Either way the launch-time snapshot is all there is.
+  if (!path) return process.env.AUTONET_IP;
+  try {
+    return JSON.parse(readFileSync(path, "utf8")).selected?.ip ?? null;
+  } catch {
+    return process.env.AUTONET_IP;
+  }
+}
+```
+
+Four rules govern the file, and your reader can rely on all four:
+
+- **It is never half-written.** Each update is renamed over the old one, so a
+  read gets the previous complete document or the next one, never a fragment.
+- **It moves when `autonet watch` would have printed a line** — the same
+  snapshot, the same diff, the same kernel notifications. It is not polled on a
+  separate schedule and cannot disagree with the CLI.
+- **It exists only while AutoNet is keeping it accurate.** It is removed when
+  the command exits, and removed again if an update ever fails. *Absence means
+  "do not trust anything here"*, which is the one signal that cannot be
+  misread — unlike a stale file that still looks current.
+- **The document is the `status --json` document.** One schema for "what does
+  AutoNet currently think the address is", whether you ask the CLI or read the
+  file. See [the JSON contract](docs/json-schema.md).
+
+The one gap: if AutoNet is killed outright (`SIGKILL`, a power cut) it never
+gets to remove the file, and a stale one is left behind. Check its age if that
+matters to you.
+
+`.autonet/` is a suggestion, not a convention AutoNet enforces — the path is
+whatever you pass. If you use a path inside your project, gitignore it.
 
 ### Explaining a surprising answer
 

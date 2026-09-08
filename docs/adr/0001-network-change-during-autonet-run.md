@@ -279,3 +279,78 @@ will detect and warn" in **Consequences** should be read as "doctor will warn".
 Nothing else in this record changes, and a later ADR that gains real evidence —
 from a running child `autonet run` spawned itself, say — would supersede this
 note rather than this record.
+
+## Extension note — 2026-09-08, post-Stage 4: the state file is built
+
+**The designated extension above is now implemented.** `autonet run
+--state-file <path>` writes an atomically-replaced state file and injects
+`AUTONET_STATE_FILE`, exactly as that section reserved. Nothing in the decision
+changes: `run` still resolves once, still spawns once, still never restarts or
+signals its child, and the three environment variables are still a launch-time
+snapshot. This note records what was built and the three choices the section
+left open.
+
+**Where the file is written: a path the user names, with no default.** The
+section did not say. A fixed location — `.autonet/current.json` relative to the
+working directory — was the obvious candidate and was rejected: two `autonet
+run` processes in one project, each with a different `--interface`, would
+silently overwrite each other's answer, and a tool that creates files in a
+directory nobody pointed it at is the wrong default for a project whose security
+posture is "explicit rather than silent". `.autonet/current.json` is documented
+as a *suggestion*. Missing parent directories are created, because the suggested
+path names one that will not exist the first time.
+
+**What drives the writes: `watch::observe`, as a third consumer.** Not a second
+detector. The file moves when and only when `autonet watch` would have printed a
+line, from the same snapshot, the same `event::diff` and the same
+`ChangeSource`. A separate poller would eventually disagree with the CLI about
+what "the address changed" means, and there would be no way to say which was
+right.
+
+**What is written: the `status --json` document, byte for byte.** One schema for
+"what does AutoNet currently think the address is", whether it is read from a
+pipe or from disk — produced by one function, `commands::selection_document`, so
+the two cannot drift. `candidates` is the sole exclusion: it is a `-v` option on
+a command a human runs, and the file is rewritten on every network change.
+
+**What happens when it stops: the file is removed.** The third option the brief
+weighed — leave it in place with a "no longer updated" marker — was rejected.
+A marker is still a file, and a careless reader parses it and uses the address
+inside. Absence is the one signal that cannot be misread, and it is also what a
+reader already handles: no file means no live channel, which is the default
+case. The file is removed when the child exits for any reason, when Ctrl-C ends
+the run, and again if any single update fails — a copy AutoNet could not refresh
+no longer means what the file claims to mean. `SIGKILL` leaves it behind, which
+no in-process design can prevent; `json-schema.md` says so and points readers at
+the modification time.
+
+### What this cost elsewhere
+
+Two shared pieces changed, both additively:
+
+- `signal::install_signal_flag` is now **idempotent**. `run --state-file` needs
+  two loops in one process — the child wait and the network watch — and
+  `ctrlc::set_handler` may be called only once. The second and later calls now
+  return the same flag, which is also what makes one Ctrl-C stop both loops.
+- `watch::Change` gained `failure`, the selector's own reason for an empty
+  selection. Without it the state file could not write the `error` field
+  `status --json` guarantees, and inventing a second wording here would have
+  broken the one-schema property this extension exists to preserve.
+
+The watch runs on a scoped thread so that the main thread's wait on the child is
+untouched. The tracker cannot fail the command: the child is already running,
+this record forbids killing it, and reporting an exit code for a live process
+would be worse than losing the file. A tracker that fails removes the file and
+says so on stderr.
+
+### Verification
+
+A real address handover was **run and observed** — an isolated network namespace,
+address moved between two interfaces, state file rewritten with the new address
+and URL in roughly 300ms via netlink. Losing the address entirely, a signalled
+child, a non-zero child, Ctrl-C cleanup and an unwritable path were all observed
+too. What remains **unverified** is the same thing that was unverified before
+this extension: a real Wi-Fi-to-Ethernet handover on real hardware. A namespace
+proves the pipeline; it does not prove the platform reports a genuine handover
+the way this loop expects. This feature's whole value proposition — staying live
+across a network change — inherits that status until that test is run.

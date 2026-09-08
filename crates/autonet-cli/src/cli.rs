@@ -117,8 +117,24 @@ docs/adr/0001-network-change-during-autonet-run.md. A program that binds \
 0.0.0.0 or :: is unaffected, because it answers on whatever address the \
 interface currently holds. `autonet doctor` explains the case that is affected.
 
+--state-file is the way out for a program that does care. Given a path, \
+AutoNet writes the current selection there as JSON -- the same document \
+autonet status --json prints -- keeps it up to date for as long as the \
+program runs, and puts the path in AUTONET_STATE_FILE. A program that re-reads \
+that file sees the new address without being restarted. Most programs need \
+nothing beyond the three variables above; this is for the ones that do.
+
 autonet run exits with the exit code of the command it ran.")]
     Run {
+        /// Keep the current selection in this file, as JSON, while the command
+        /// runs.
+        ///
+        /// The path is passed to the command as AUTONET_STATE_FILE. The file
+        /// is removed when the command exits, so its absence means AutoNet is
+        /// no longer updating it. Suggested: `.autonet/current.json`, gitignored.
+        #[arg(long, value_name = "PATH")]
+        state_file: Option<PathBuf>,
+
         /// The command to run, then its arguments.
         ///
         /// Put `--` before it so that flags belong to the command rather than

@@ -24,6 +24,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use autonet_core::event::{diff, NetworkDiff, NetworkEvent};
+use autonet_core::model::NetworkState;
 use autonet_core::select::{select, SelectedAddress};
 use autonet_platform::{change_source, ChangeSource, PlatformError};
 use serde_json::json;
@@ -85,6 +86,13 @@ pub(crate) struct Change<'a> {
     pub diff: &'a NetworkDiff,
     /// When the snapshot behind `current` was taken, in Unix seconds.
     pub captured_at: Option<u64>,
+    /// Why nothing is selected, when `current` is `None`.
+    ///
+    /// The selector's own explanation, carried through rather than recomputed
+    /// by the consumer: `autonet run --state-file` writes the same `error`
+    /// field `status --json` would, and a second wording invented here would
+    /// make the two disagree. `None` whenever `current` is `Some`.
+    pub failure: Option<&'a str>,
     /// What woke the loop for this report: a named event source, or
     /// [`POLLING`].
     ///
@@ -167,7 +175,7 @@ pub(crate) fn observe(
     // interface disappearing mid-watch, which is the event being watched for.
     let mut state = ctx.snapshot()?;
     check_requested_interface(ctx, &state)?;
-    let mut selected = select(&state, &ctx.config.selection).selected;
+    let (mut selected, failure) = resolve(ctx, &state);
 
     let mut deliver = |change: &Change| -> Result<bool, CliError> {
         match on_change(change) {
@@ -183,6 +191,7 @@ pub(crate) fn observe(
         current: selected.as_ref(),
         diff: &opening,
         captured_at: state.captured_at,
+        failure: failure.as_deref(),
         source: name(source.as_deref()),
     })?;
     if !keep_going {
@@ -222,7 +231,7 @@ pub(crate) fn observe(
             continue;
         }
 
-        let current = select(&state, &ctx.config.selection).selected;
+        let (current, failure) = resolve(ctx, &state);
         if !differs(selected.as_ref(), current.as_ref()) {
             continue;
         }
@@ -232,6 +241,7 @@ pub(crate) fn observe(
             current: current.as_ref(),
             diff: &changes,
             captured_at: state.captured_at,
+            failure: failure.as_deref(),
             source: name(source.as_deref()),
         })?;
         if !keep_going {
@@ -240,6 +250,22 @@ pub(crate) fn observe(
 
         selected = current;
     }
+}
+
+/// Run the selector, keeping its explanation when it comes back empty.
+///
+/// The reason is computed here, where the [`Selection`](autonet_core::select::Selection)
+/// that knows it is still in scope, rather than left to the consumer: by the
+/// time a [`Change`] reaches a callback the candidates are gone, and a caller
+/// that needs to say *why* there is no address would otherwise have to run the
+/// selector a second time and hope it agreed with this one.
+fn resolve(ctx: &Context, state: &NetworkState) -> (Option<SelectedAddress>, Option<String>) {
+    let selection = select(state, &ctx.config.selection);
+    let failure = selection
+        .selected
+        .is_none()
+        .then(|| selection.failure_reason(&ctx.config.selection));
+    (selection.selected, failure)
 }
 
 /// Whether two selections differ in a way anyone downstream would act on.

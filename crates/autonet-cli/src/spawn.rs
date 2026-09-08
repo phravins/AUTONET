@@ -7,7 +7,18 @@
 //! environment of a running process cannot be rewritten from outside it and
 //! pretending otherwise would mean killing the thing the user asked to run.
 //! See `docs/adr/0001-network-change-during-autonet-run.md`.
+//!
+//! `--state-file` is that ADR's designated extension, not a departure from it.
+//! It adds a second, opt-in channel beside the environment variables: a file
+//! kept current while the child runs, which the child may re-read on its own
+//! schedule. Nothing about the first channel changes — the variables are still
+//! a launch-time snapshot, the child is still spawned once, and AutoNet still
+//! never restarts or signals it. The state file gives a program that wants
+//! liveness a way to have it *by its own choosing*, which is the distinction
+//! the ADR turned on.
 
+use std::ffi::OsString;
+use std::path::Path;
 use std::process::{Command as StdCommand, ExitStatus};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
@@ -15,9 +26,11 @@ use std::time::{Duration, Instant};
 use autonet_core::select::{select, SelectedAddress};
 
 use crate::cli::GlobalArgs;
-use crate::commands::{check_requested_interface, Context};
+use crate::commands::{check_requested_interface, selection_document, Context};
 use crate::port;
 use crate::signal::install_signal_flag;
+use crate::state::StateFile;
+use crate::watch;
 use crate::{exit, CliError};
 
 /// How long the child is given to act on the signal it already received before
@@ -32,7 +45,12 @@ const GRACE: Duration = Duration::from_secs(5);
 const POLL: Duration = Duration::from_millis(50);
 
 /// Run a command with `AUTONET_*` in its environment.
-pub fn run(ctx: &Context, args: &GlobalArgs, command: &[String]) -> Result<(), CliError> {
+pub fn run(
+    ctx: &Context,
+    args: &GlobalArgs,
+    command: &[String],
+    state_file: Option<&Path>,
+) -> Result<(), CliError> {
     let (program, arguments) = command
         .split_first()
         .ok_or_else(|| CliError::Usage("no command given. Try: autonet run -- npm start".into()))?;
@@ -75,19 +93,128 @@ pub fn run(ctx: &Context, args: &GlobalArgs, command: &[String]) -> Result<(), C
     // child running with nobody waiting on it.
     let interrupted = install_signal_flag()?;
 
+    // Opened and written *before* the spawn, for the same reason the address is
+    // resolved before it: a path that cannot be written should fail here, with
+    // nothing launched, rather than leave a child polling for a file that will
+    // never appear. It also means the file is already there for a program that
+    // reads it during its own startup.
+    let tracked = match state_file {
+        Some(path) => {
+            let file = StateFile::create(path)?;
+            let opening = selection_document(
+                ctx.provider.platform_name(),
+                state.captured_at,
+                Some(&selected),
+                None,
+                port,
+            );
+            file.write(&opening).map_err(|error| {
+                CliError::Usage(format!(
+                    "cannot write the state file {}: {error}",
+                    file.path().display()
+                ))
+            })?;
+            Some(file)
+        }
+        None => None,
+    };
+
     // An argument vector, never a shell string: `program` names a file to
     // execute, and every element of `arguments` reaches it as one argument
     // however it is spelled. Nothing here interprets quotes, globs or `;`.
     let mut child = StdCommand::new(program)
         .args(arguments)
-        .envs(env_vars(&selected, port))
+        .envs(env_vars(
+            &selected,
+            port,
+            tracked.as_ref().map(StateFile::path),
+        ))
         .spawn()
         .map_err(|error| spawn_error(program, &error))?;
 
-    let status = wait_for(&mut child, &interrupted)?;
-    match exit_code(status.code(), interrupted.load(Ordering::SeqCst)) {
+    let (status, was_interrupted) = match &tracked {
+        None => {
+            let status = wait_for(&mut child, &interrupted);
+            let seen = interrupted.load(Ordering::SeqCst);
+            (status, seen)
+        }
+        // A scope rather than a detached thread: the tracker borrows `ctx`, and
+        // joining it here is what guarantees nothing is still writing the file
+        // when the removal below takes it away.
+        Some(file) => std::thread::scope(|scope| {
+            scope.spawn(|| track(ctx, args, file));
+
+            let status = wait_for(&mut child, &interrupted);
+
+            // Read before it is set, below. This is the value that decides
+            // whether a child with no exit code was terminated or merely
+            // failed, and setting the flag first would answer "terminated"
+            // every time the state file was in use.
+            let seen = interrupted.load(Ordering::SeqCst);
+
+            // Now wake the tracker, so this scope can join. It is watching the
+            // network on behalf of a program that has stopped reading. Never
+            // skipped and never conditional: the scope does not return until
+            // the tracker does, so a path that left the flag clear would hang.
+            interrupted.store(true, Ordering::SeqCst);
+
+            (status, seen)
+        }),
+    };
+
+    // Before the `?` below, so the file goes away even when the wait itself
+    // failed. The alternative is a file left behind claiming to be current
+    // because the cleanup path was the one that did not run.
+    if let Some(file) = &tracked {
+        file.remove();
+    }
+
+    match exit_code(status?.code(), was_interrupted) {
         0 => Ok(()),
         code => Err(CliError::ChildExit(code)),
+    }
+}
+
+/// Keep the state file current for as long as the child is running.
+///
+/// A consumer of [`watch::observe`], not a second detector: the file moves when
+/// and only when `autonet watch` would have printed a line, using the same
+/// snapshot, the same diff and the same event source. Anything else would be a
+/// third opinion about what "the address changed" means.
+///
+/// Returns nothing, and cannot fail the command. The child is already running;
+/// ADR 0001 forbids killing it, and failing `run` while it lives would report
+/// an exit code for a process that had not exited. What a failure does instead
+/// is take the file away and say so — see [`StateFile`] for why absence is the
+/// honest answer.
+fn track(ctx: &Context, args: &GlobalArgs, file: &StateFile) {
+    let outcome = watch::observe(ctx, |change| {
+        let document = selection_document(
+            ctx.provider.platform_name(),
+            change.captured_at,
+            change.current,
+            change.failure,
+            args.port(&ctx.config),
+        );
+
+        if let Err(error) = file.write(&document) {
+            file.remove();
+            eprintln!(
+                "autonet: cannot update the state file {}: {error}",
+                file.path().display()
+            );
+        }
+
+        Ok(())
+    });
+
+    // `Ok` is the interrupted case, where `run` is already on its way out and
+    // will remove the file itself.
+    if let Err(error) = outcome {
+        file.remove();
+        if let Some(message) = error.message() {
+            eprintln!("autonet: the state file is no longer being updated: {message}");
+        }
     }
 }
 
@@ -97,13 +224,17 @@ pub fn run(ctx: &Context, args: &GlobalArgs, command: &[String]) -> Result<(), C
 /// function is the exact contract `autonet run` advertises, and the IPv6
 /// bracketing in particular is the sort of thing that is wrong for a year
 /// before anyone notices.
-fn env_vars(selected: &SelectedAddress, port: Option<u16>) -> Vec<(&'static str, String)> {
-    let mut vars = vec![
+fn env_vars(
+    selected: &SelectedAddress,
+    port: Option<u16>,
+    state_file: Option<&Path>,
+) -> Vec<(&'static str, OsString)> {
+    let mut vars: Vec<(&'static str, OsString)> = vec![
         // Bare, so `ping $AUTONET_IP` and `--host $AUTONET_IP` work. An IPv6
         // address is *not* bracketed here; that is what AUTONET_HOST is for.
-        ("AUTONET_IP", selected.ip.to_string()),
+        ("AUTONET_IP", selected.ip.to_string().into()),
         // URL-safe: identical to AUTONET_IP for IPv4, bracketed for IPv6.
-        ("AUTONET_HOST", selected.url_host()),
+        ("AUTONET_HOST", selected.url_host().into()),
     ];
 
     // Only with a port. A URL without one would either be wrong or invite the
@@ -112,7 +243,21 @@ fn env_vars(selected: &SelectedAddress, port: Option<u16>) -> Vec<(&'static str,
         // `None`: `run` publishes no name. ADR 0001 is explicit that this
         // variable is a launch-time snapshot, and a `.local` name here would
         // imply a freshness the child does not get.
-        vars.push(("AUTONET_URL", crate::url::network_url(selected, port, None)));
+        vars.push((
+            "AUTONET_URL",
+            crate::url::network_url(selected, port, None).into(),
+        ));
+    }
+
+    // Only when `--state-file` was given. Its absence is how a program tells
+    // that it has the three-variable snapshot and nothing more, which is the
+    // default and remains the right answer for almost everything.
+    //
+    // `OsString`, not a lossy `display()`: this is a path the child is expected
+    // to open, and a byte of it replaced with U+FFFD is a path to somewhere
+    // else.
+    if let Some(path) = state_file {
+        vars.push(("AUTONET_STATE_FILE", path.as_os_str().to_os_string()));
     }
 
     vars
@@ -231,24 +376,24 @@ mod tests {
         )
     }
 
-    fn lookup<'a>(vars: &'a [(&'static str, String)], name: &str) -> Option<&'a str> {
+    fn lookup<'a>(vars: &'a [(&'static str, OsString)], name: &str) -> Option<&'a str> {
         vars.iter()
             .find(|(key, _)| *key == name)
-            .map(|(_, value)| value.as_str())
+            .map(|(_, value)| value.to_str().expect("test values are UTF-8"))
     }
 
     #[test]
     fn a_port_is_required_before_a_url_is_offered() {
         // A URL without a port would either be wrong or invite the caller to
         // append one to a string that may already contain a colon.
-        let vars = env_vars(&v4(), None);
+        let vars = env_vars(&v4(), None, None);
         assert_eq!(lookup(&vars, "AUTONET_URL"), None);
         assert_eq!(lookup(&vars, "AUTONET_IP"), Some("192.168.1.20"));
     }
 
     #[test]
     fn a_port_produces_a_url_that_can_be_opened() {
-        let vars = env_vars(&v4(), Some(3000));
+        let vars = env_vars(&v4(), Some(3000), None);
         assert_eq!(
             lookup(&vars, "AUTONET_URL"),
             Some("http://192.168.1.20:3000")
@@ -259,7 +404,7 @@ mod tests {
     fn only_the_url_form_of_an_ipv6_address_is_bracketed() {
         // `ping $AUTONET_IP` needs the bare form and `curl $AUTONET_URL` needs
         // the bracketed one. Conflating them breaks one of the two.
-        let vars = env_vars(&v6(), Some(8080));
+        let vars = env_vars(&v6(), Some(8080), None);
         assert_eq!(lookup(&vars, "AUTONET_IP"), Some("fd00::1"));
         assert_eq!(lookup(&vars, "AUTONET_HOST"), Some("[fd00::1]"));
         assert_eq!(lookup(&vars, "AUTONET_URL"), Some("http://[fd00::1]:8080"));
@@ -267,18 +412,62 @@ mod tests {
 
     #[test]
     fn an_ipv4_host_is_not_decorated() {
-        let vars = env_vars(&v4(), None);
+        let vars = env_vars(&v4(), None, None);
         assert_eq!(lookup(&vars, "AUTONET_HOST"), Some("192.168.1.20"));
     }
 
     #[test]
     fn nothing_beyond_the_three_documented_variables_is_injected() {
         // The child's environment is the user's, not a place to leave notes.
-        let names: Vec<&str> = env_vars(&v4(), Some(1))
+        let names: Vec<&str> = env_vars(&v4(), Some(1), None)
             .iter()
             .map(|(key, _)| *key)
             .collect();
         assert_eq!(names, ["AUTONET_IP", "AUTONET_HOST", "AUTONET_URL"]);
+    }
+
+    #[test]
+    fn the_state_file_adds_one_variable_and_only_when_it_was_asked_for() {
+        // Injecting AUTONET_STATE_FILE unconditionally would tell every child
+        // that a file exists, and almost every child would be wrong. Its
+        // absence is how a program knows it has the snapshot and nothing more.
+        let names = |vars: &[(&'static str, OsString)]| -> Vec<&'static str> {
+            vars.iter().map(|(key, _)| *key).collect()
+        };
+
+        assert_eq!(
+            names(&env_vars(&v4(), Some(1), None)),
+            ["AUTONET_IP", "AUTONET_HOST", "AUTONET_URL"]
+        );
+        assert_eq!(
+            names(&env_vars(
+                &v4(),
+                Some(1),
+                Some(Path::new("/srv/app/.autonet/current.json"))
+            )),
+            [
+                "AUTONET_IP",
+                "AUTONET_HOST",
+                "AUTONET_URL",
+                "AUTONET_STATE_FILE"
+            ]
+        );
+    }
+
+    #[test]
+    fn the_state_file_path_reaches_the_child_exactly_as_given() {
+        // The child opens this string. Anything that reshapes it -- a lossy
+        // conversion, a trailing separator, a quote -- is a path to a file
+        // that is not the one AutoNet is writing.
+        let vars = env_vars(
+            &v4(),
+            None,
+            Some(Path::new("/srv/app/.autonet/current.json")),
+        );
+        assert_eq!(
+            lookup(&vars, "AUTONET_STATE_FILE"),
+            Some("/srv/app/.autonet/current.json")
+        );
     }
 
     #[test]

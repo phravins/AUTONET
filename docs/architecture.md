@@ -126,12 +126,16 @@ source can only change *when* the pipeline runs, never *what it concludes*.
 Parses flags, layers configuration, takes a snapshot, asks the core, renders.
 `commands.rs` holds one function per command, with the ones that outgrew a
 screen — `spawn.rs`, `watch.rs`, `advertise.rs` — in modules of their own;
-`render.rs` holds the table and colour machinery.
+`render.rs` holds the table and colour machinery. `state.rs` writes the optional
+file `autonet run --state-file` keeps current, and is a consumer of `watch.rs`
+rather than a second detector.
 
 It contains no *discovery* logic and no `#[cfg(target_os)]`: it never asks the
 operating system what the network looks like. There is exactly one place where
 it puts packets on the wire — `advertise.rs` runs an mDNS responder on UDP
-5353 — and that is worth naming here rather than leaving to be discovered.
+5353 — and one where it writes outside its own output streams — `state.rs`
+writes the path `--state-file` names, and nothing else. Both are worth naming
+here rather than leaving to be discovered.
 
 It is not the layering breach it first looks like. Discovery is a *question*
 about this machine that three operating systems answer through three unrelated

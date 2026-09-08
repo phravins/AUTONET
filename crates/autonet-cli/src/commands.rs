@@ -4,7 +4,7 @@ use std::fmt::Write as _;
 
 use autonet_core::config::Config;
 use autonet_core::model::{Interface, NetworkState, Route};
-use autonet_core::select::{select, Candidate, Selection};
+use autonet_core::select::{select, Candidate, SelectedAddress, Selection};
 use autonet_platform::NetworkProvider;
 use serde::Serialize;
 use serde_json::json;
@@ -95,16 +95,53 @@ fn check_qr_is_possible(ctx: &Context, args: &GlobalArgs) -> Result<u16, CliErro
 
 /// The QR block appended to `status`, with the port [`check_qr_is_possible`]
 /// established.
-fn status_qr(
-    ctx: &Context,
-    selected: &autonet_core::select::SelectedAddress,
-    port: u16,
-) -> Result<String, CliError> {
+fn status_qr(ctx: &Context, selected: &SelectedAddress, port: u16) -> Result<String, CliError> {
     // `None`: `status` publishes no name, so the address is the only host that
     // is true right now. See `url::network_url` for the swap point, and
     // `advertise` for the one caller standing on the other side of it.
     let url = url::network_url(selected, port, None);
     Ok(format!("\n{}", qr::block(&url, ctx.theme)?))
+}
+
+/// The document that answers "what does AutoNet currently think the address
+/// is": the body of `status --json`, and the whole of the state file.
+///
+/// Shared rather than written twice. The state file exists so that a program
+/// can read the same answer from disk that it would get from the CLI, and two
+/// builders would drift into two answers — the exact failure the one-schema
+/// rule in `docs/json-schema.md` is there to prevent.
+///
+/// Takes the pieces rather than a [`Selection`] because the state file's
+/// caller does not have one: it is handed a change by `watch::observe`, which
+/// carries the winner and the reason there wasn't one but not the whole field
+/// of candidates.
+pub(crate) fn selection_document(
+    platform: &str,
+    captured_at: Option<u64>,
+    selected: Option<&SelectedAddress>,
+    failure: Option<&str>,
+    port: Option<u16>,
+) -> serde_json::Value {
+    let mut payload = json!({
+        "schema_version": autonet_core::SCHEMA_VERSION,
+        "platform": platform,
+        "captured_at": captured_at,
+        "selected": selected,
+    });
+
+    match selected {
+        Some(selected) => {
+            if let Some(port) = port {
+                payload["urls"] = json!({
+                    "local": url::local_url(selected.family, port),
+                    "network": url::network_url(selected, port, None),
+                });
+            }
+        }
+        None => payload["error"] = json!(failure),
+    }
+
+    payload
 }
 
 fn status_json(
@@ -113,25 +150,22 @@ fn status_json(
     state: &NetworkState,
     selection: &Selection,
 ) -> String {
-    let mut payload = json!({
-        "schema_version": autonet_core::SCHEMA_VERSION,
-        "platform": ctx.provider.platform_name(),
-        "captured_at": state.captured_at,
-        "selected": selection.selected,
-    });
+    let failure = selection
+        .selected
+        .is_none()
+        .then(|| selection.failure_reason(&ctx.config.selection));
 
-    match &selection.selected {
-        Some(selected) => {
-            if let Some(port) = args.port(&ctx.config) {
-                payload["urls"] = json!({
-                    "local": url::local_url(selected.family, port),
-                    "network": url::network_url(selected, port, None),
-                });
-            }
-        }
-        None => payload["error"] = json!(selection.failure_reason(&ctx.config.selection)),
-    }
+    let mut payload = selection_document(
+        ctx.provider.platform_name(),
+        state.captured_at,
+        selection.selected.as_ref(),
+        failure.as_deref(),
+        args.port(&ctx.config),
+    );
 
+    // Only `status` carries these, and only when asked: the state file is
+    // rewritten on every network change, and a full candidate list in it would
+    // grow the write without answering the question it is read for.
     if args.verbose {
         payload["candidates"] = json!(selection.candidates);
     }

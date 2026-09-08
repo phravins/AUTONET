@@ -52,7 +52,7 @@ A change that breaks any of the above increments `schema_version`.
 | `selected` | object \| null | `null` when nothing was selectable. |
 | `urls` | object | Present only when a port is known, from `--port` or `output.default_port`. |
 | `error` | string | Present only when `selected` is `null`. |
-| `candidates` | array | Present only with `-v`. See [below](#candidates). |
+| `candidates` | array | Present only with `-v`. See [below](#candidates-with--v). |
 
 `urls.local` is what a browser **on this machine** would open. `urls.network` is
 the point of the whole tool: the URL another device can open. They are separate
@@ -336,6 +336,40 @@ removal plus an addition.
 
 A single handover produces several events at once. `reason` picks the most
 explanatory one and words it; `events` keeps all of them.
+
+## The state file (`autonet run --state-file`)
+
+Not a fourth payload shape: **the state file contains the
+[`autonet status --json`](#autonet-status---json) document, unchanged.** Both
+are produced by one function, so they cannot drift. Everything above about
+`selected`, `urls`, `error` and the enumerations applies verbatim.
+
+The differences are in the file's *lifecycle*, not its contents, and they are
+part of the contract:
+
+| | |
+|---|---|
+| **Where** | The path given to `--state-file`, made absolute. Handed to the child as `AUTONET_STATE_FILE`. |
+| **When it changes** | Once before the child is launched, then whenever [`autonet watch`](#autonet-watch---json) would have emitted a line. Same snapshot, same diff, same event source. |
+| **Atomicity** | Written to a sibling temporary and renamed into place. A reader gets the previous complete document or the next one — never a partial write, and never an empty file. |
+| **`candidates`** | Never present. `-v` is a `status` option; the file is rewritten on every network change and a candidate list would grow each write without answering the question it is read for. |
+| **Absence** | AutoNet is not maintaining this file. It is removed when the command exits — for any reason, including a failure — and removed again if an update fails. |
+
+Absence is deliberately the only "stop" signal: there is no `"stale": true`
+marker to check, because a file that says it is stale is still a file a careless
+reader will parse and use. The one case AutoNet cannot cover is being killed
+outright (`SIGKILL`, power loss), where no cleanup runs at all; a reader that
+cares should check the file's modification time.
+
+Reading it is the same as reading `status --json`:
+
+```sh
+jq -r '.selected.ip // empty' "$AUTONET_STATE_FILE"
+```
+
+An unset `AUTONET_STATE_FILE` means the program was launched without
+`--state-file`, and `AUTONET_IP` is all there is. That is the ordinary case; see
+[ADR 0001](adr/0001-network-change-during-autonet-run.md) for why.
 
 ## Enumerations
 

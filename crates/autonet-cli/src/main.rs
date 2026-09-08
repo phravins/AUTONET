@@ -14,6 +14,7 @@ mod qr;
 mod render;
 mod signal;
 mod spawn;
+mod state;
 mod url;
 mod watch;
 
@@ -123,7 +124,10 @@ fn run(cli: &Cli) -> Result<(), CliError> {
         Command::Ip => commands::ip(&ctx, &cli.global),
         Command::Interfaces => commands::interfaces(&ctx, &cli.global),
         Command::Routes => commands::routes(&ctx, &cli.global),
-        Command::Run { command } => spawn::run(&ctx, &cli.global, &command),
+        Command::Run {
+            state_file,
+            command,
+        } => spawn::run(&ctx, &cli.global, &command, state_file.as_deref()),
         Command::Watch => watch::watch(&ctx, &cli.global),
         Command::Doctor => commands::doctor(&ctx, &cli.global),
         Command::Advertise => advertise::advertise(&ctx, &cli.global),
