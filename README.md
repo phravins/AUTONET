@@ -590,5 +590,7 @@ diff <(autonet ip) <(ip route get 1.1.1.1 | grep -oP 'src \K\S+')
 
 ## Licence
 
-MIT OR Apache-2.0, at your option. See [LICENSE-MIT](LICENSE-MIT) and
-[LICENSE-APACHE](LICENSE-APACHE).
+Apache-2.0. See [LICENSE-APACHE](LICENSE-APACHE).
+
+AutoNet was dual MIT OR Apache-2.0 until Stage 4. No release was ever
+published under those terms, so nothing is in circulation under the MIT half.

@@ -16,8 +16,8 @@ class Autonet < Formula
   desc "Find the LAN address a service is actually reachable on"
   homepage "https://github.com/phravins/AUTONET"
   version "0.1.0"
-  # Matches `license = "MIT OR Apache-2.0"` in Cargo.toml.
-  license any_of: ["MIT", "Apache-2.0"]
+  # Matches `license = "Apache-2.0"` in Cargo.toml.
+  license "Apache-2.0"
 
   on_macos do
     on_arm do

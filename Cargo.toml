@@ -10,7 +10,7 @@ members = [
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.82"
-license = "MIT OR Apache-2.0"
+license = "Apache-2.0"
 # The real remote. This said `osworks/autonet` until Stage 4, which resolves
 # to nothing.
 repository = "https://github.com/phravins/AUTONET"

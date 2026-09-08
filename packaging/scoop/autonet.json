@@ -21,8 +21,8 @@
     "description": "Find the LAN address a service is actually reachable on, without hand-editing an IP. Unsigned: Windows SmartScreen may warn on first run.",
     "homepage": "https://github.com/phravins/AUTONET",
     "license": {
-        "identifier": "MIT|Apache-2.0",
-        "url": "https://github.com/phravins/AUTONET/blob/main/LICENSE-MIT"
+        "identifier": "Apache-2.0",
+        "url": "https://github.com/phravins/AUTONET/blob/main/LICENSE-APACHE"
     },
     "architecture": {
         "64bit": {

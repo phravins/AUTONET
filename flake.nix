@@ -44,7 +44,7 @@
           meta = with pkgs.lib; {
             description = "Find the IP address other devices on your network can reach";
             homepage = "https://github.com/phravins/AUTONET";
-            license = with licenses; [ mit asl20 ];
+            license = licenses.asl20;
             mainProgram = "autonet";
             platforms = platforms.unix ++ platforms.windows;
           };

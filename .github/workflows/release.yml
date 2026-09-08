@@ -151,7 +151,7 @@ jobs:
           stem="autonet-${{ needs.verify.outputs.version }}-${{ matrix.target }}"
           mkdir "$stem"
           cp "target/${{ matrix.target }}/release/autonet" "$stem/"
-          cp README.md LICENSE-MIT LICENSE-APACHE "$stem/"
+          cp README.md LICENSE-APACHE "$stem/"
           tar czf "$stem.tar.gz" "$stem"
           ls -l "$stem.tar.gz"
 
@@ -167,7 +167,6 @@ jobs:
           $files = @(
             "target/${{ matrix.target }}/release/autonet.exe",
             "README.md",
-            "LICENSE-MIT",
             "LICENSE-APACHE"
           )
           Compress-Archive -Path $files -DestinationPath "$stem.zip"
