@@ -69,7 +69,7 @@ genuinely need a machine live in `crates/autonet-platform/tests/live.rs` and are
 | `classify` | Pure functions: which scope does this IP have, what kind of device is this? Every RFC boundary is a unit test. |
 | `select` | Disqualification, then scoring. Returns the winner **and** every candidate with per-rule reasons. |
 | `config` | TOML plus the `AUTONET_*` environment layer. Unknown keys are rejected. |
-| `event` | `NetworkEvent` / `NetworkDiff`, and `diff()`. Defined now, used in M4. |
+| `event` | `NetworkEvent` / `NetworkDiff`, and `diff()`. Read by `autonet watch`, and through it by `autonet advertise`. |
 
 `select` returning the full candidate list rather than just a winner is
 deliberate. It makes `-v` a rendering job, and it will make `autonet doctor` a
@@ -97,11 +97,51 @@ binding for no benefit.
 
 `Send + Sync` because the M5 daemon will share one provider across handlers.
 
+The crate holds a second, narrower trait — for noticing that a snapshot has gone
+out of date:
+
+```rust
+pub trait ChangeSource: Send {
+    fn wait(&mut self, timeout: Duration) -> Result<bool, PlatformError>;
+    fn source_name(&self) -> &'static str;
+}
+```
+
+Deliberately not part of `NetworkProvider`. Taking a snapshot is universal;
+being *told* about a change is not. Linux has netlink; macOS and Windows have
+nothing wired up here yet and poll instead. So `change_source()` returns
+`Result<Option<Box<dyn ChangeSource>>>`, where `None` means "this platform has
+nothing to subscribe to" — the ordinary answer, not a failure — and an error
+means "it has something and it could not be opened". Folding the two into one
+would make a restricted container look like macOS.
+
+`wait` returns a bool rather than the change itself. The source says *something
+happened*; `NetworkProvider` is then asked what the state is now, and `diff()`
+says what moved. Keeping the payload out of the trait is what stops a backend
+becoming a second, divergent account of the network, and it is why an event
+source can only change *when* the pipeline runs, never *what it concludes*.
+
 ### `autonet-cli`
 
 Parses flags, layers configuration, takes a snapshot, asks the core, renders.
-It contains no networking logic at all. `run.rs` holds one function per command;
+`commands.rs` holds one function per command, with the ones that outgrew a
+screen — `spawn.rs`, `watch.rs`, `advertise.rs` — in modules of their own;
 `render.rs` holds the table and colour machinery.
+
+It contains no *discovery* logic and no `#[cfg(target_os)]`: it never asks the
+operating system what the network looks like. There is exactly one place where
+it puts packets on the wire — `advertise.rs` runs an mDNS responder on UDP
+5353 — and that is worth naming here rather than leaving to be discovered.
+
+It is not the layering breach it first looks like. Discovery is a *question*
+about this machine that three operating systems answer through three unrelated
+APIs, which is precisely why it sits behind `NetworkProvider`. Publishing a name
+is an *action the user explicitly asked for*, its protocol is identical on every
+platform, and it is implemented by a cross-platform crate rather than by
+AutoNet. The rule that would be broken is "no platform-specific code above
+`autonet-platform`", and there is none. If that ever stops being true — ADR 0002
+names Windows as the likeliest place — the responder moves down behind a trait,
+for exactly the reason the rule exists.
 
 ## Extension recipes
 
@@ -121,8 +161,9 @@ anything: policy behind a `#[cfg]` is policy that cannot be fixture-tested.
 
 ### Adding a command
 
-Add a variant to `cli::Command`, a function to `run.rs`, and a match arm in
-`main.rs`. If the command needs a new *decision*, that decision belongs in
+Add a variant to `cli::Command`, a function to `commands.rs` — or its own
+module, once it outgrows a screen, as `watch` and `advertise` did — and a match
+arm in `main.rs`. If the command needs a new *decision*, that decision belongs in
 `autonet-core` with fixture tests, not in the renderer.
 
 ### Changing the wire format
@@ -168,7 +209,37 @@ block, and note in the release notes that the file needs the newer binary.
 - Output is conservative by default. MAC addresses are withheld from
   `interfaces --json` unless `-v` is passed.
 - Nothing opens a firewall port or exposes a service as a side effect. Any
-  feature that makes an application LAN-reachable will be explicit.
+  feature that makes an application LAN-reachable is explicit.
+- `autonet advertise` (M4a) is the only feature that transmits, and it is a test
+  of the rule above rather than an exception to it: it is off until the
+  configuration file turns it on, and `hostname.enabled` deliberately has **no**
+  environment-variable override. Consent to publish belongs in a file somebody
+  wrote and can read back, not in a variable a parent process exported.
+
+### Is advertising the same risk as binding the daemon to `0.0.0.0`?
+
+They look alike, so the answer is written down rather than assumed.
+
+**Not the same category.** The daemon's localhost-only rule exists because an
+HTTP API *accepts input and acts on it*; every additional host that can reach it
+is another host that can ask it to do something. The mDNS responder accepts a
+question and answers with a name→address mapping for an address this machine
+already answers on. It grants no access, opens no port for the application, and
+changes nothing about what a peer could reach by typing the address it is being
+handed. Anyone who can hear the announcement is already on the link and would
+have found the machine with one ARP sweep.
+
+**The same category in one respect**, which is why the toggle exists at all:
+both are decisions about who can reach this machine, and neither is AutoNet's to
+make on the user's behalf. So both default to off and both require a deliberate
+act to enable.
+
+**What is genuinely new**, with no counterpart on the list above: the machine
+*names itself, unprompted and repeatedly, to the whole link* — including
+whatever the operator chose to call it. That is an information disclosure rather
+than an access grant, it is why `hostname.name` exists so the published name
+need not be the system's own, and it is analysed in full in
+[ADR 0002](adr/0002-mdns-advertisement.md).
 
 ## Milestones
 
@@ -177,9 +248,9 @@ block, and note in the release notes that the file needs the newer binary.
 | M1 | Workspace, Nix, Linux discovery, data model, selection engine, `status` / `ip` / `interfaces` / `routes`, `--json` | Complete |
 | M2a | macOS backend — `getifaddrs`, SystemConfiguration, `PF_ROUTE` | Written; hardware acceptance outstanding |
 | M2b | Windows backend — IP Helper (`GetAdaptersAddresses`, `GetIpForwardTable2`) | In progress |
-| M3 | `autonet run` — inject `AUTONET_IP`, `AUTONET_HOST`, `AUTONET_URL` | Planned |
-| M4 | `autonet watch` — network change events | Planned |
-| M4a | `autonet advertise` — a `.local` name for the selected address, re-announced through M4's pipeline | Planned |
+| M3 | `autonet run` — inject `AUTONET_IP`, `AUTONET_HOST`, `AUTONET_URL` | Complete |
+| M4 | `autonet watch` — network change events | Built; netlink verified against synthetic interfaces, a real Wi-Fi handover not yet observed |
+| M4a | `autonet advertise` — a `.local` name for the selected address, re-announced through M4's pipeline | Built; record verified locally, resolution from a second device outstanding |
 | M4b | `autonet status --qr` — the network URL as a scannable QR code | Built; phone-camera acceptance outstanding |
 | M5 | Daemon with a local HTTP API over a Unix socket / named pipe | Planned |
 | M6 | Python, TypeScript, Java and .NET SDKs — thin wrappers, never reimplementations | Planned |

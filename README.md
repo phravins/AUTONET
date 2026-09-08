@@ -80,6 +80,7 @@ on Nix**.
 | `autonet routes` | The routing table, default routes first. |
 | `autonet run -- <cmd>` | Runs a command with `AUTONET_IP`, `AUTONET_HOST` and `AUTONET_URL` in its environment, and exits with the command's own exit code. The variables are a snapshot taken at launch; see [ADR 0001](docs/adr/0001-network-change-during-autonet-run.md). |
 | `autonet doctor` | A checklist of what works and what does not, in plain language, with a summary line. |
+| `autonet watch` | Prints the selected address, then prints it again each time it changes. Reads the kernel's own change notifications where the platform has them, and falls back to a timer where it does not. |
 | `autonet advertise` | Publishes a `.local` name pointing at the selected address, and re-publishes it whenever the address moves. **This transmits** — it is off until `[hostname] enabled` says otherwise. See [ADR 0002](docs/adr/0002-mdns-advertisement.md). |
 
 Common flags, accepted before or after any command:
@@ -89,7 +90,7 @@ Common flags, accepted before or after any command:
 | `--json` | Machine-readable output. See [the JSON contract](#the-json-contract). |
 | `-f, --family <ipv4\|ipv6\|any>` | Which family to prefer. Default `ipv4`. |
 | `-p, --port <PORT>` | Also render the URL to open on another device. Defaults to `output.default_port`. A hint about what to *print*, not about what a command will *bind* — `autonet run` warns if it is taken, and starts the command anyway. |
-| `--qr` | Also render the network URL as a QR code a phone camera can read. Needs a port; refused with `--json`, where the payload is already `urls.network`. |
+| `--qr` | Also render the URL as a QR code a phone camera can read — the address under `status`, the published name under `advertise`. Needs a port; refused with `--json`, where the payload is already `urls.network`. |
 | `-i, --interface <NAME>` | Use only this interface. |
 | `-x, --exclude <NAME>` | Never use this interface. Repeatable; a trailing `*` matches a prefix. |
 | `--allow-vpn` | Stop penalising VPN tunnels. |
@@ -215,6 +216,13 @@ address on *every* interface — frequently a Docker bridge nobody can reach.
 AutoNet publishes one address, the selected one. Override the name with
 `[hostname] name` or `AUTONET_HOSTNAME`.
 
+`--qr` works here too, and this is the one case where a scanned code outlives
+the address it was made from. It encodes the *name* — the responder answering it
+is the process you are looking at — so the code stays good across the handover
+described above, which is exactly what a code from `status` cannot promise. It
+is drawn once, when the advertisement opens, because the address moving does not
+change what the code says.
+
 What goes on the wire: the name, the selected address, the port, and the service
 type. Nothing else — no interface names, no MAC addresses, no scores. What does
 not: AutoNet advertises only. It never browses, collects, or records what other
@@ -264,6 +272,10 @@ enabled. Setting `enabled = true` means this machine *may* advertise; the name
 only resolves while `autonet advertise` is actually running, and `status`
 prints and exits. A code carrying a name nothing is answering would scan
 cleanly and then fail to load, which is worse than the address it replaced.
+
+`autonet advertise --qr` encodes the name, for the mirror-image reason: there
+the responder is running, so the name is the fact that holds still and the
+address is the one that moves.
 
 `--qr` needs a port — a code is only worth scanning if it opens something — and
 is refused with `--json`, where the same string is already `urls.network`.
@@ -437,15 +449,29 @@ whole workspace can be built and tested from any machine.
 
 ## Roadmap
 
-Milestone 1 (discovery, selection, `status` / `ip` / `interfaces` / `routes`) is
-complete. Planned next, in order:
+Shipped:
 
-- **M2a** macOS backend — written, awaiting hardware acceptance
-- **M2b** Windows backend — in progress
+- **M1** discovery, selection, `status` / `ip` / `interfaces` / `routes`
 - **M3** `autonet run` — run an existing app unmodified with `AUTONET_IP`,
   `AUTONET_HOST` and `AUTONET_URL` injected
 - **M4** `autonet watch` — react to Wi-Fi ↔ Ethernet switches, VPNs coming up,
   cables being unplugged
+- **M4a** `autonet advertise` — a `.local` name for the selected address,
+  republished through M4's pipeline when it moves
+- **M4b** `autonet status --qr` — the network URL as a scannable code
+
+Built, but not yet signed off on real hardware — these are honest gaps, not
+formalities:
+
+- **M2a** macOS backend — written, awaiting hardware acceptance
+- **M2b** Windows backend — in progress
+- **M4** a real Wi-Fi handover, observed end to end, rather than the synthetic
+  interfaces the tests use
+- **M4a** a second device resolving the published `.local` name
+- **M4b** a phone camera actually scanning the code
+
+Planned, in order:
+
 - **M5** a local daemon with an HTTP API over a Unix socket / named pipe
 - **M6** thin SDKs for Python, TypeScript, Java and .NET
 

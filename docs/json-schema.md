@@ -64,6 +64,13 @@ a second copy of one fact that can only ever agree with the first, and a picture
 has no place in a machine contract. See
 [ADR 0003](adr/0003-qr-code-contents.md).
 
+`autonet advertise --qr` encodes something different: `http://<published
+name>:<port>`, the `.local` name rather than the address. That is the one place
+the two disagree, and it is deliberate — under `advertise` the name is the
+stable fact and the address is the one that moves, so a code scanned there
+survives a handover that would invalidate a code scanned from `status`. The same
+refusal applies: `advertise --qr --json` exits 2.
+
 ### Failure
 
 ```json
@@ -239,6 +246,96 @@ another process passes to `bind()`, so that row is guidance rather than a
 measurement, and reporting it as a pass would claim a check that never
 happened. See
 [ADR 0001](adr/0001-network-change-during-autonet-run.md).
+
+## `autonet watch --json`
+
+One JSON document per line, written as it happens and flushed immediately, so
+`autonet watch --json | while read -r line; do …; done` works. The stream does
+not end on its own; it ends when you stop it, or when the reader closes the pipe
+(which is an ordinary exit `0`, not a crash).
+
+```json
+{
+  "schema_version": 1,
+  "change": "initial",
+  "captured_at": 1788844483,
+  "source": "linux-netlink-monitor",
+  "previous": null,
+  "current": {
+    "ip": "192.168.1.18",
+    "family": "ipv4",
+    "prefix_len": 24,
+    "scope": "private",
+    "interface": "wlo1",
+    "interface_index": 3,
+    "interface_kind": "wireless",
+    "gateway": "192.168.1.1",
+    "score": 1415
+  },
+  "reason": null,
+  "events": []
+}
+```
+
+| Field | Type | Meaning |
+|---|---|---|
+| `change` | string | `"initial"` for the opening document, `"selection"` for every one after it. |
+| `captured_at` | integer \| null | When the snapshot behind `current` was taken, in Unix seconds. |
+| `source` | string | What noticed. See below. |
+| `previous` | object \| null | The selection before this change. Always `null` on the opening document. |
+| `current` | object \| null | The selection now. `null` when nothing is selectable — the "no network" report. |
+| `reason` | string \| null | One sentence naming the most explanatory event. `null` when there are none. |
+| `events` | array | Every underlying change, each tagged with its own `event` field. |
+
+`previous` and `current` are the same object as `status --json`'s `selected`.
+
+The first document describes the **starting state**, not a change, which is what
+`change: "initial"` is for: a consumer that only wants transitions skips it, and
+one that wants to render current state immediately does not have to wait for the
+network to move first. It is the only document with `previous: null`, and the
+only one whose `events` array is empty.
+
+A document is written when the **selected address changes** — a different IP, or
+the same IP on a different interface. Events that do not change the answer (a
+route metric moving, a container interface appearing) are observed and
+deliberately produce no line: `watch` reports the answer changing, not the
+network twitching.
+
+### `source`
+
+Which mechanism noticed, named per document rather than fixed for the run:
+
+| Value | Meaning |
+|---|---|
+| `linux-netlink-monitor` | A kernel netlink subscription. Sub-second. |
+| `polling` | A timer. The platform has no event source, or the subscription was lost. |
+
+**It can change mid-stream.** If an event source fails partway through, `watch`
+says so once on stderr and keeps going on the timer — losing it costs latency,
+not correctness — and subsequent documents say `polling`. A consumer needs this
+field to know what silence means: thirty seconds of nothing is unremarkable
+under a timer and worth noticing under netlink.
+
+### `events[]`
+
+Each element is an object with an `event` discriminator:
+
+| `event` | Other fields |
+|---|---|
+| `interface_added` | `interface` |
+| `interface_removed` | `interface` |
+| `interface_state_changed` | `interface`, `from`, `to` |
+| `address_added` | `interface`, `address` |
+| `address_removed` | `interface`, `address` |
+| `default_route_changed` | `family`, `from_interface`, `to_interface` — either may be `null` |
+
+`address` is the same object as `interfaces[].addresses[]`. Interfaces are
+matched between snapshots **by name, not kernel index**, so an adapter that
+returns with a fresh index reports as one interface changing rather than as a
+removal plus an addition.
+
+A single handover produces several events at once. `reason` picks the most
+explanatory one and words it; `events` keeps all of them.
 
 ## Enumerations
 
