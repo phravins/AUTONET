@@ -217,7 +217,17 @@ jobs:
         run: |
           set -euo pipefail
           ls -l artifacts
-          gh release create "$GITHUB_REF_NAME" \
-            --title "$GITHUB_REF_NAME" \
-            --generate-notes \
-            artifacts/*
+          # A release may already exist for this tag: someone drafted one in the
+          # web UI while the matrix was building, or an earlier run of this job
+          # got part way. `gh release create` refuses either way, which loses
+          # five good builds over a naming collision. Attach to what is there
+          # instead, and only create when there is nothing to attach to.
+          if gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1; then
+            echo "A release for $GITHUB_REF_NAME exists; attaching artifacts to it."
+            gh release upload "$GITHUB_REF_NAME" artifacts/* --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" \
+              --title "$GITHUB_REF_NAME" \
+              --generate-notes \
+              artifacts/*
+          fi
