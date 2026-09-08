@@ -7,6 +7,8 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
+keywords = ["network", "netlink", "iphlpapi", "interfaces"]
+categories = ["network-programming", "os"]
 
 [dependencies]
 autonet-core = { workspace = true }

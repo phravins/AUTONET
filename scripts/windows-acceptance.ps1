@@ -260,11 +260,11 @@ Invoke-RecordedOs '17-os-ipconfig.txt' 'ipconfig /all' 'ipconfig.exe' @('/all')
 # ---------------------------------------------------------------------------
 # Built once and invoked as a binary, so that --json output is exactly the
 # document and not a document with cargo's progress lines in front of it. This
-# is the same set of commands the brief asks for as `cargo run -p autonet-cli --`
+# is the same set of commands the brief asks for as `cargo run -p autonet --`
 # and produces identical output with nothing prepended.
 
 Write-Section 'building'
-& cargo build --release -p autonet-cli
+& cargo build --release -p autonet
 if ($LASTEXITCODE -ne 0) {
     Write-Host 'the CLI did not build - stopping, since nothing below would mean anything'
     exit 1

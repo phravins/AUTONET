@@ -11,7 +11,12 @@ version = "0.1.0"
 edition = "2021"
 rust-version = "1.82"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/osworks/autonet"
+# Both point at the real remote. This said `osworks/autonet` from the first
+# commit, which resolves to nothing -- harmless while the only install method
+# was `--path`, and a 404 for every crates.io visitor and every install script
+# the moment anything is published.
+repository = "https://github.com/phravins/AUTONET"
+homepage = "https://github.com/phravins/AUTONET"
 authors = ["AutoNet contributors"]
 
 [workspace.dependencies]

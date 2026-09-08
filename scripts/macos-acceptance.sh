@@ -142,7 +142,7 @@ record_os 14-os-scutil-nwi.txt "scutil --nwi" scutil --nwi
 # document and not a document with cargo's progress lines in front of it.
 
 section "building"
-if ! cargo build --release -p autonet-cli; then
+if ! cargo build --release -p autonet; then
   echo "the CLI did not build — stopping, since nothing below would mean anything" >&2
   exit 1
 fi

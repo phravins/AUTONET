@@ -7,6 +7,15 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
+keywords = ["network", "ip-address", "lan", "routing"]
+categories = ["network-programming"]
+# tests/fixtures.rs reads its corpus from ../../tests/fixtures, which is outside
+# this package and so cannot be in the .crate. Shipping the test without its
+# 15 fixtures would publish a file that fails the moment anyone runs it, and
+# shipping the fixtures would double the download for data that is only
+# meaningful next to the repository's own git history. CI runs them from the
+# workspace, which is the only place they mean anything.
+exclude = ["tests"]
 
 [dependencies]
 serde = { workspace = true }

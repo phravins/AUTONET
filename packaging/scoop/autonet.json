@@ -1,0 +1,68 @@
+{
+    "##": [
+        "AutoNet, as a Scoop manifest. Scoop treats a '##' property as a comment.",
+        "",
+        "THE HASH BELOW IS A PLACEHOLDER: sixty-four zeros, which is well-formed",
+        "but matches no file, so `scoop install` fails loudly rather than",
+        "installing something unverified. It cannot be filled in until a release",
+        "exists, and this repository has no tags yet. After the first tag push,",
+        "take it from the release's own SHA256SUMS:",
+        "",
+        "  curl -fsSL https://github.com/phravins/AUTONET/releases/latest/download/SHA256SUMS",
+        "",
+        "The filename below is exactly what .github/workflows/release.yml builds.",
+        "The zip it produces is flat -- autonet.exe at the archive root, with no",
+        "wrapping directory -- which is what the 'bin' entry below assumes.",
+        "",
+        "Install straight from this file, with no bucket:",
+        "",
+        "  scoop install https://raw.githubusercontent.com/phravins/AUTONET/main/packaging/scoop/autonet.json",
+        "",
+        "Only 64bit is listed. release.yml builds x86_64-pc-windows-msvc and",
+        "nothing else for Windows, so claiming arm64 or 32bit here would point",
+        "at files that are never produced."
+    ],
+    "version": "0.1.0",
+    "description": "Find the LAN address a service is actually reachable on, without hand-editing an IP. Unsigned: Windows SmartScreen may warn on first run.",
+    "homepage": "https://github.com/phravins/AUTONET",
+    "license": {
+        "identifier": "MIT|Apache-2.0",
+        "url": "https://github.com/phravins/AUTONET/blob/main/LICENSE-MIT"
+    },
+    "architecture": {
+        "64bit": {
+            "url": "https://github.com/phravins/AUTONET/releases/download/v0.1.0/autonet-0.1.0-x86_64-pc-windows-msvc.zip",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+        }
+    },
+    "bin": "autonet.exe",
+    "notes": [
+        "AutoNet is not code-signed.",
+        "",
+        "Windows SmartScreen may show an 'unrecognised app' warning the first time",
+        "you run autonet.exe. Scoop has already verified the download against the",
+        "SHA256 published with the release, which is a stronger check than a code",
+        "signature proves; the warning means the binary has no Authenticode",
+        "signature, not that anything is wrong with it.",
+        "",
+        "To dismiss it: More info -> Run anyway. Or clear the mark-of-the-web with",
+        "  Unblock-File (scoop which autonet)",
+        "",
+        "AutoNet needs no administrator rights. It reads network state and, with",
+        "'autonet advertise', sends multicast DNS on the local link. It opens no",
+        "inbound ports and changes no system configuration."
+    ],
+    "checkver": {
+        "github": "https://github.com/phravins/AUTONET"
+    },
+    "autoupdate": {
+        "architecture": {
+            "64bit": {
+                "url": "https://github.com/phravins/AUTONET/releases/download/v$version/autonet-$version-x86_64-pc-windows-msvc.zip"
+            }
+        },
+        "hash": {
+            "url": "$baseurl/SHA256SUMS"
+        }
+    }
+}
