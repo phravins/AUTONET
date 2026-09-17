@@ -92,7 +92,7 @@ fn interface_from(message: &LinkMessage) -> Option<Interface> {
 
     for attribute in &message.attributes {
         match attribute {
-            LinkAttribute::IfName(value) => name = Some(value.clone()),
+            LinkAttribute::IfName(value) => name = Some(value.as_str()),
             LinkAttribute::OperState(value) => oper_state = Some(*value),
             LinkAttribute::Address(bytes) => mac = format_mac(bytes),
             LinkAttribute::Mtu(value) => mtu = Some(*value),
@@ -112,14 +112,14 @@ fn interface_from(message: &LinkMessage) -> Option<Interface> {
 
     let is_loopback = link_flags.contains(LinkFlags::Loopback);
     let kind = classify_interface(
-        &name,
+        name,
         link_kind.as_deref(),
         is_loopback,
-        sysfs::is_wireless(&name),
+        sysfs::is_wireless(name),
     );
 
     Some(Interface {
-        name,
+        name: name.to_string(),
         index,
         kind,
         state: interface_state(oper_state, link_flags),
@@ -364,5 +364,23 @@ mod tests {
             interface_state(Some(State::LowerLayerDown), LinkFlags::Up),
             InterfaceState::Down
         );
+    }
+
+    #[test]
+    fn test_interface_from_parsing() {
+        let mut msg = LinkMessage::default();
+        msg.header.index = 1;
+        msg.header.flags = LinkFlags::Up | LinkFlags::Running;
+        msg.attributes = vec![
+            LinkAttribute::IfName("eth0".to_string()),
+            LinkAttribute::OperState(State::Up),
+            LinkAttribute::Address(vec![0x00, 0x11, 0x22, 0x33, 0x44, 0x55]),
+            LinkAttribute::Mtu(1500),
+        ];
+
+        let iface = interface_from(&msg).expect("interface should be parsed");
+        assert_eq!(iface.name, "eth0");
+        assert_eq!(iface.index, 1);
+        assert_eq!(iface.mtu, Some(1500));
     }
 }
