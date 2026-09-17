@@ -12,12 +12,49 @@
 //! ([`super::sysfs`] only tests for existence), so every path it opens is
 //! either a constant or built from a number that has already been parsed.
 
+use std::fmt::Write;
 use std::net::IpAddr;
 use std::os::unix::fs::MetadataExt;
+use std::path::Path;
 
 use super::procnet::{self, Listener};
 use crate::portmatch::{self, Bound};
 use crate::PortHolder;
+
+/// A small inline buffer for formatting paths without heap allocations.
+struct StackBuf<const N: usize> {
+    buf: [u8; N],
+    len: usize,
+}
+
+impl<const N: usize> StackBuf<N> {
+    fn new() -> Self {
+        Self {
+            buf: [0; N],
+            len: 0,
+        }
+    }
+
+    fn as_str(&self) -> &str {
+        std::str::from_utf8(&self.buf[..self.len]).unwrap_or_default()
+    }
+
+    fn as_path(&self) -> &Path {
+        Path::new(self.as_str())
+    }
+}
+
+impl<const N: usize> Write for StackBuf<N> {
+    fn write_str(&mut self, s: &str) -> std::fmt::Result {
+        let bytes = s.as_bytes();
+        if self.len + bytes.len() > N {
+            return Err(std::fmt::Error);
+        }
+        self.buf[self.len..self.len + bytes.len()].copy_from_slice(bytes);
+        self.len += bytes.len();
+        Ok(())
+    }
+}
 
 /// The kernel's two TCP socket tables, one per family.
 ///
@@ -85,20 +122,26 @@ impl Bound for Listener {
 /// Errors are skipped rather than reported at every level: `/proc` is a live
 /// directory whose entries vanish underneath a walk as processes exit.
 fn pid_owning(inode: u64) -> Option<u32> {
-    let target = format!("socket:[{inode}]");
+    let mut target = StackBuf::<64>::new();
+    let _ = write!(target, "socket:[{inode}]");
 
     std::fs::read_dir("/proc")
         .ok()?
         .flatten()
         .filter_map(|entry| entry.file_name().to_str()?.parse::<u32>().ok())
-        .find(|&pid| holds(pid, &target))
+        .find(|&pid| holds(pid, target.as_str()))
 }
 
 /// Whether process `pid` has a descriptor pointing at `target`.
 fn holds(pid: u32, target: &str) -> bool {
     // `pid` was parsed as a number before it reached this path, which rules out
     // traversal more firmly than any check on a string could.
-    let Ok(descriptors) = std::fs::read_dir(format!("/proc/{pid}/fd")) else {
+    let mut path = StackBuf::<64>::new();
+    if write!(path, "/proc/{pid}/fd").is_err() {
+        return false;
+    }
+
+    let Ok(descriptors) = std::fs::read_dir(path.as_path()) else {
         // EACCES for another user's process, ENOENT if it has since exited.
         return false;
     };
@@ -116,7 +159,9 @@ fn holds(pid: u32, target: &str) -> bool {
 /// kernel truncates it to fifteen characters, so `node` survives but a long
 /// path would not have been shown here anyway.
 fn command_name(pid: u32) -> Option<String> {
-    let comm = std::fs::read_to_string(format!("/proc/{pid}/comm")).ok()?;
+    let mut path = StackBuf::<64>::new();
+    write!(path, "/proc/{pid}/comm").ok()?;
+    let comm = std::fs::read_to_string(path.as_path()).ok()?;
     let name = comm.trim();
     (!name.is_empty()).then(|| name.to_owned())
 }
