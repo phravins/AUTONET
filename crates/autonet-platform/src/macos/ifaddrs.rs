@@ -38,21 +38,6 @@ type ScTypes = HashMap<String, ScType>;
 /// Routes come from [`super::route`] and are joined on the interface index by
 /// the caller.
 pub(crate) fn interfaces(sc_types: &ScTypes) -> Result<Vec<Interface>, PlatformError> {
-    let mut interfaces = links(sc_types)?;
-    attach_addresses(&mut interfaces)?;
-    interfaces.sort_by(|a, b| a.name.cmp(&b.name));
-
-    Ok(interfaces)
-}
-
-// ---------------------------------------------------------------------------
-// Links
-// ---------------------------------------------------------------------------
-
-/// Every device the kernel reports.
-///
-/// Sorted by name so `autonet interfaces` lists devices in a stable order.
-fn links(sc_types: &ScTypes) -> Result<Vec<Interface>, PlatformError> {
     let mut head: *mut libc::ifaddrs = std::ptr::null_mut();
 
     // SAFETY: `getifaddrs` either writes an owned linked list into `head` and
@@ -64,31 +49,54 @@ fn links(sc_types: &ScTypes) -> Result<Vec<Interface>, PlatformError> {
         ));
     }
 
-    let mut interfaces = Vec::new();
+    struct HeadGuard(*mut libc::ifaddrs);
+    impl Drop for HeadGuard {
+        fn drop(&mut self) {
+            if !self.0.is_null() {
+                // SAFETY: `head` came from `getifaddrs` and has not been freed.
+                unsafe { libc::freeifaddrs(self.0) };
+            }
+        }
+    }
+    let guard = HeadGuard(head);
+
+    let mut map = links_from_head(guard.0, sc_types);
+    let mut orphans = Vec::new();
+    attach_addresses(&mut map, &mut orphans)?;
+
+    let mut result: Vec<Interface> = map.into_values().chain(orphans).collect();
+    result.sort_by(|a, b| a.name.cmp(&b.name));
+
+    Ok(result)
+}
+
+// ---------------------------------------------------------------------------
+// Links
+// ---------------------------------------------------------------------------
+
+/// Every device the kernel reports, keyed by name string reference.
+fn links_from_head<'a>(
+    head: *mut libc::ifaddrs,
+    sc_types: &ScTypes,
+) -> HashMap<&'a str, Interface> {
+    let mut interfaces = HashMap::new();
     let mut node = head;
+
     while !node.is_null() {
         // SAFETY: `node` is non-null and points into the list `getifaddrs`
         // built, which is not freed until the walk is over.
         let entry = unsafe { &*node };
-        if let Some(interface) = link_from(entry, sc_types) {
-            if let Some(existing) = interfaces.iter_mut().find(|i| i.name == interface.name) {
-                *existing = interface;
-            } else {
-                interfaces.push(interface);
-            }
+        if let Some((name_str, interface)) = link_from(entry, sc_types) {
+            interfaces.insert(name_str, interface);
         }
         node = entry.ifa_next;
     }
 
-    // SAFETY: `head` came from `getifaddrs` and has not been freed. Everything
-    // above was copied out of the list, so nothing borrows it any more.
-    unsafe { libc::freeifaddrs(head) };
-
-    Ok(interfaces)
+    interfaces
 }
 
 /// Build an interface from one `AF_LINK` record, or skip anything else.
-fn link_from(entry: &libc::ifaddrs, sc_types: &ScTypes) -> Option<Interface> {
+fn link_from<'a>(entry: &'a libc::ifaddrs, sc_types: &ScTypes) -> Option<(&'a str, Interface)> {
     if entry.ifa_addr.is_null() {
         return None;
     }
@@ -99,7 +107,8 @@ fn link_from(entry: &libc::ifaddrs, sc_types: &ScTypes) -> Option<Interface> {
         return None;
     }
 
-    let name = name_of(entry)?;
+    let name_str = name_str(entry)?;
+    let name = name_str.to_owned();
     let link = entry.ifa_addr.cast::<libc::sockaddr_dl>();
 
     // SAFETY: `sa_family` says `AF_LINK`, so this really is a `sockaddr_dl`.
@@ -115,41 +124,41 @@ fn link_from(entry: &libc::ifaddrs, sc_types: &ScTypes) -> Option<Interface> {
     let kind = linktype::classify(Evidence {
         loopback: is_loopback,
         point_to_point,
-        sc: sc_types.get(&name).copied(),
+        sc: sc_types.get(name_str).copied(),
         ifi_type: ifi_type_of(entry),
     });
 
-    Some(Interface {
-        name,
-        index,
-        kind,
-        state: interface_state(flags),
-        flags: InterfaceFlags {
-            up: has(flags, libc::IFF_UP),
-            running: has(flags, libc::IFF_RUNNING),
-            loopback: is_loopback,
-            broadcast: has(flags, libc::IFF_BROADCAST),
-            point_to_point,
-            multicast: has(flags, libc::IFF_MULTICAST),
+    Some((
+        name_str,
+        Interface {
+            name,
+            index,
+            kind,
+            state: interface_state(flags),
+            flags: InterfaceFlags {
+                up: has(flags, libc::IFF_UP),
+                running: has(flags, libc::IFF_RUNNING),
+                loopback: is_loopback,
+                broadcast: has(flags, libc::IFF_BROADCAST),
+                point_to_point,
+                multicast: has(flags, libc::IFF_MULTICAST),
+            },
+            // SAFETY: as above — an `AF_LINK` sockaddr.
+            mac: unsafe { hardware_address(link) },
+            mtu: mtu_of(entry),
+            addresses: Vec::new(),
         },
-        // SAFETY: as above — an `AF_LINK` sockaddr.
-        mac: unsafe { hardware_address(link) },
-        mtu: mtu_of(entry),
-        addresses: Vec::new(),
-    })
+    ))
 }
 
-/// The interface name, or `None` if it is absent or not UTF-8.
-///
-/// An unnameable device is one no config rule could match and no user could act
-/// on, so it is dropped rather than given a synthetic name.
-fn name_of(entry: &libc::ifaddrs) -> Option<String> {
+/// The interface name reference, or `None` if it is absent or not UTF-8.
+fn name_str(entry: &libc::ifaddrs) -> Option<&str> {
     if entry.ifa_name.is_null() {
         return None;
     }
     // SAFETY: non-null, and `getifaddrs` guarantees a NUL-terminated name.
     let name = unsafe { CStr::from_ptr(entry.ifa_name) };
-    Some(name.to_str().ok()?.to_owned())
+    name.to_str().ok()
 }
 
 /// The hardware address carried by an `AF_LINK` record.
@@ -250,7 +259,10 @@ fn mtu_of(entry: &libc::ifaddrs) -> Option<u32> {
 // Addresses
 // ---------------------------------------------------------------------------
 
-fn attach_addresses(interfaces: &mut Vec<Interface>) -> Result<(), PlatformError> {
+fn attach_addresses(
+    interfaces: &mut HashMap<&str, Interface>,
+    orphans: &mut Vec<Interface>,
+) -> Result<(), PlatformError> {
     let reported =
         if_addrs::get_if_addrs().map_err(|e| PlatformError::query("list IP addresses", e))?;
     let v6_flags = V6Flags::open();
@@ -280,11 +292,13 @@ fn attach_addresses(interfaces: &mut Vec<Interface>) -> Result<(), PlatformError
         };
 
         let (name, index) = (record.name, record.index);
-        let iface = if let Some(iface) = interfaces.iter_mut().find(|i| i.name == name) {
+        let iface = if let Some(iface) = interfaces.get_mut(name.as_str()) {
             iface
+        } else if let Some(pos) = orphans.iter().position(|i| i.name == name) {
+            &mut orphans[pos]
         } else {
-            interfaces.push(orphan(&name, index));
-            interfaces.last_mut().unwrap()
+            orphans.push(orphan(&name, index));
+            orphans.last_mut().unwrap()
         };
 
         iface
