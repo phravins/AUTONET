@@ -289,6 +289,10 @@ fn non_empty_env(key: &str) -> Option<String> {
     std::env::var(key).ok().filter(|v| !v.trim().is_empty())
 }
 
+/// Parse a boolean environment variable safely into a `Result<Option<bool>>` without panicking.
+///
+/// Accepts truthy values ("1", "true", "yes", "on") and falsy values ("0", "false", "no", "off").
+/// Returns `Ok(None)` if the variable is unset or empty, and `Err(CoreError::InvalidConfig)` on unrecognised input.
 fn parse_bool_env(key: &str) -> Result<Option<bool>> {
     let Some(raw) = non_empty_env(key) else {
         return Ok(None);
@@ -453,5 +457,48 @@ mod tests {
         );
         assert_eq!(paths(Some(""), Some(""), Some("")), None);
         assert_eq!(paths(None, None, None), None);
+    }
+
+    #[test]
+    fn parse_bool_env_handles_truthy_falsy_and_invalid_values() {
+        // Test internal parse_bool_env directly by manipulating environment variable for testing
+        let key = "AUTONET_TEST_BOOL_PARSING_VAR";
+
+        // Unset variable returns Ok(None)
+        std::env::remove_var(key);
+        assert_eq!(parse_bool_env(key).unwrap(), None);
+
+        // Empty / whitespace variable returns Ok(None)
+        std::env::set_var(key, "   ");
+        assert_eq!(parse_bool_env(key).unwrap(), None);
+
+        // Truthy values
+        for val in ["1", "true", "TRUE", "Yes", "on", "  true  "] {
+            std::env::set_var(key, val);
+            assert_eq!(parse_bool_env(key).unwrap(), Some(true), "Failed for {val}");
+        }
+
+        // Falsy values
+        for val in ["0", "false", "FALSE", "No", "off", "  OFF  "] {
+            std::env::set_var(key, val);
+            assert_eq!(
+                parse_bool_env(key).unwrap(),
+                Some(false),
+                "Failed for {val}"
+            );
+        }
+
+        // Invalid values return CoreError::InvalidConfig
+        for val in ["invalid", "maybe", "2", "yes1"] {
+            std::env::set_var(key, val);
+            let err = parse_bool_env(key).unwrap_err();
+            assert!(
+                matches!(err, CoreError::InvalidConfig(_)),
+                "Expected InvalidConfig error for {val}, got {err:?}"
+            );
+        }
+
+        // Cleanup
+        std::env::remove_var(key);
     }
 }
