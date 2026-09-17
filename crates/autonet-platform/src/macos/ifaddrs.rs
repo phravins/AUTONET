@@ -14,7 +14,7 @@
 //! **Unverified on hardware.** Type-checked for both Darwin targets, but every
 //! claim about struct layout is read from headers rather than observed.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::ffi::CStr;
 use std::net::{IpAddr, Ipv6Addr};
 
@@ -40,19 +40,19 @@ type ScTypes = HashMap<String, ScType>;
 pub(crate) fn interfaces(sc_types: &ScTypes) -> Result<Vec<Interface>, PlatformError> {
     let mut interfaces = links(sc_types)?;
     attach_addresses(&mut interfaces)?;
+    interfaces.sort_by(|a, b| a.name.cmp(&b.name));
 
-    Ok(interfaces.into_values().collect())
+    Ok(interfaces)
 }
 
 // ---------------------------------------------------------------------------
 // Links
 // ---------------------------------------------------------------------------
 
-/// Every device the kernel reports, keyed by name.
+/// Every device the kernel reports.
 ///
-/// Keyed by name because that is the only join key the address pass has. A
-/// `BTreeMap` so `autonet interfaces` lists devices in a stable order.
-fn links(sc_types: &ScTypes) -> Result<BTreeMap<String, Interface>, PlatformError> {
+/// Sorted by name so `autonet interfaces` lists devices in a stable order.
+fn links(sc_types: &ScTypes) -> Result<Vec<Interface>, PlatformError> {
     let mut head: *mut libc::ifaddrs = std::ptr::null_mut();
 
     // SAFETY: `getifaddrs` either writes an owned linked list into `head` and
@@ -64,14 +64,18 @@ fn links(sc_types: &ScTypes) -> Result<BTreeMap<String, Interface>, PlatformErro
         ));
     }
 
-    let mut interfaces = BTreeMap::new();
+    let mut interfaces = Vec::new();
     let mut node = head;
     while !node.is_null() {
         // SAFETY: `node` is non-null and points into the list `getifaddrs`
         // built, which is not freed until the walk is over.
         let entry = unsafe { &*node };
         if let Some(interface) = link_from(entry, sc_types) {
-            interfaces.insert(interface.name.clone(), interface);
+            if let Some(existing) = interfaces.iter_mut().find(|i| i.name == interface.name) {
+                *existing = interface;
+            } else {
+                interfaces.push(interface);
+            }
         }
         node = entry.ifa_next;
     }
@@ -246,7 +250,7 @@ fn mtu_of(entry: &libc::ifaddrs) -> Option<u32> {
 // Addresses
 // ---------------------------------------------------------------------------
 
-fn attach_addresses(interfaces: &mut BTreeMap<String, Interface>) -> Result<(), PlatformError> {
+fn attach_addresses(interfaces: &mut Vec<Interface>) -> Result<(), PlatformError> {
     let reported =
         if_addrs::get_if_addrs().map_err(|e| PlatformError::query("list IP addresses", e))?;
     let v6_flags = V6Flags::open();
@@ -276,9 +280,14 @@ fn attach_addresses(interfaces: &mut BTreeMap<String, Interface>) -> Result<(), 
         };
 
         let (name, index) = (record.name, record.index);
-        interfaces
-            .entry(name.clone())
-            .or_insert_with(|| orphan(&name, index))
+        let iface = if let Some(iface) = interfaces.iter_mut().find(|i| i.name == name) {
+            iface
+        } else {
+            interfaces.push(orphan(&name, index));
+            interfaces.last_mut().unwrap()
+        };
+
+        iface
             .addresses
             // `Address::new` derives family and scope from the IP itself, which
             // is why no scope logic appears in this crate.
