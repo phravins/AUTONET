@@ -311,12 +311,14 @@ fn candidate_table(selection: &Selection, theme: Theme) -> String {
 }
 
 fn reasons(candidate: &Candidate) -> String {
-    candidate
-        .reasons
-        .iter()
-        .map(|r| format!("{} {:+}", r.rule, r.delta))
-        .collect::<Vec<_>>()
-        .join(", ")
+    let mut s = String::with_capacity(candidate.reasons.len() * 24);
+    for (i, r) in candidate.reasons.iter().enumerate() {
+        if i > 0 {
+            s.push_str(", ");
+        }
+        let _ = write!(s, "{} {:+}", r.rule, r.delta);
+    }
+    s
 }
 
 // ---------------------------------------------------------------------------
@@ -405,12 +407,14 @@ pub fn interfaces(ctx: &Context, args: &GlobalArgs) -> Result<(), CliError> {
             let addresses = if interface.addresses.is_empty() {
                 theme.muted("—")
             } else {
-                interface
-                    .addresses
-                    .iter()
-                    .map(|a| format!("{}/{}", a.ip, a.prefix_len))
-                    .collect::<Vec<_>>()
-                    .join(", ")
+                let mut s = String::with_capacity(interface.addresses.len() * 20);
+                for (i, a) in interface.addresses.iter().enumerate() {
+                    if i > 0 {
+                        s.push_str(", ");
+                    }
+                    let _ = write!(s, "{}/{}", a.ip, a.prefix_len);
+                }
+                s
             };
 
             let mut row = vec![
@@ -689,4 +693,92 @@ fn indent(text: &str) -> String {
         let _ = writeln!(out, "  {line}");
         out
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use autonet_core::model::Address;
+    use std::time::Instant;
+
+    struct DisplayAddresses<'a>(&'a [Address]);
+    impl std::fmt::Display for DisplayAddresses<'_> {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            for (i, a) in self.0.iter().enumerate() {
+                if i > 0 {
+                    f.write_str(", ")?;
+                }
+                write!(f, "{}/{}", a.ip, a.prefix_len)?;
+            }
+            Ok(())
+        }
+    }
+
+    #[test]
+    #[ignore = "benchmark test for address formatting"]
+    fn bench_address_formatting() {
+        let addresses = vec![
+            Address::new("192.168.1.100".parse().unwrap(), 24),
+            Address::new("10.0.0.1".parse().unwrap(), 8),
+            Address::new("fe80::1".parse().unwrap(), 64),
+            Address::new("2001:db8::1".parse().unwrap(), 128),
+        ];
+
+        let iterations = 200_000;
+
+        // Baseline approach
+        let start = Instant::now();
+        for _ in 0..iterations {
+            let res = addresses
+                .iter()
+                .map(|a| format!("{}/{}", a.ip, a.prefix_len))
+                .collect::<Vec<_>>()
+                .join(", ");
+            std::hint::black_box(res);
+        }
+        let duration_baseline = start.elapsed();
+
+        // Optimized approach with fold and write!
+        let start = Instant::now();
+        for _ in 0..iterations {
+            let res = addresses
+                .iter()
+                .enumerate()
+                .fold(String::new(), |mut acc, (i, a)| {
+                    if i > 0 {
+                        acc.push_str(", ");
+                    }
+                    let _ = write!(acc, "{}/{}", a.ip, a.prefix_len);
+                    acc
+                });
+            std::hint::black_box(res);
+        }
+        let duration_fold = start.elapsed();
+
+        // Optimized approach with custom Display
+        let start = Instant::now();
+        for _ in 0..iterations {
+            let res = DisplayAddresses(&addresses).to_string();
+            std::hint::black_box(res);
+        }
+        let duration_display = start.elapsed();
+
+        // Optimized approach with for-loop + with_capacity
+        let start = Instant::now();
+        for _ in 0..iterations {
+            let mut s = String::with_capacity(addresses.len() * 20);
+            for (i, a) in addresses.iter().enumerate() {
+                if i > 0 {
+                    s.push_str(", ");
+                }
+                let _ = write!(s, "{}/{}", a.ip, a.prefix_len);
+            }
+            std::hint::black_box(s);
+        }
+        let duration_loop = start.elapsed();
+
+        println!(
+            "200k iterations -> Baseline: {duration_baseline:?}, Fold: {duration_fold:?}, Display: {duration_display:?}, LoopWithCap: {duration_loop:?}"
+        );
+    }
 }
