@@ -13,6 +13,7 @@
 //! either a constant or built from a number that has already been parsed.
 
 use std::net::IpAddr;
+use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::MetadataExt;
 
 use super::procnet::{self, Listener};
@@ -80,6 +81,21 @@ impl Bound for Listener {
     }
 }
 
+/// Parse an ASCII PID from bytes without UTF-8 checks or allocations.
+fn parse_pid(bytes: &[u8]) -> Option<u32> {
+    if bytes.is_empty() {
+        return None;
+    }
+    let mut pid: u32 = 0;
+    for &b in bytes {
+        if !b.is_ascii_digit() {
+            return None;
+        }
+        pid = pid.checked_mul(10)?.checked_add(u32::from(b - b'0'))?;
+    }
+    Some(pid)
+}
+
 /// Find the process holding the socket with this inode.
 ///
 /// Errors are skipped rather than reported at every level: `/proc` is a live
@@ -90,7 +106,7 @@ fn pid_owning(inode: u64) -> Option<u32> {
     std::fs::read_dir("/proc")
         .ok()?
         .flatten()
-        .filter_map(|entry| entry.file_name().to_str()?.parse::<u32>().ok())
+        .filter_map(|entry| parse_pid(entry.file_name().as_bytes()))
         .find(|&pid| holds(pid, &target))
 }
 
@@ -124,6 +140,17 @@ fn command_name(pid: u32) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parse_pid_valid_and_invalid_inputs() {
+        assert_eq!(parse_pid(b"1"), Some(1));
+        assert_eq!(parse_pid(b"1234"), Some(1234));
+        assert_eq!(parse_pid(b"4294967295"), Some(u32::MAX));
+        assert_eq!(parse_pid(b""), None);
+        assert_eq!(parse_pid(b"sys"), None);
+        assert_eq!(parse_pid(b"12a3"), None);
+        assert_eq!(parse_pid(b"4294967296"), None); // overflow
+    }
 
     #[test]
     fn a_row_reports_the_address_and_port_collision_matches_on() {
