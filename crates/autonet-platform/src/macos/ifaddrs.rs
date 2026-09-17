@@ -37,6 +37,18 @@ type ScTypes = HashMap<String, ScType>;
 ///
 /// Routes come from [`super::route`] and are joined on the interface index by
 /// the caller.
+/// RAII guard to free `getifaddrs` list when leaving scope.
+struct HeadGuard(*mut libc::ifaddrs);
+
+impl Drop for HeadGuard {
+    fn drop(&mut self) {
+        if !self.0.is_null() {
+            // SAFETY: `head` came from `getifaddrs` and has not been freed.
+            unsafe { libc::freeifaddrs(self.0) };
+        }
+    }
+}
+
 pub(crate) fn interfaces(sc_types: &ScTypes) -> Result<Vec<Interface>, PlatformError> {
     let mut head: *mut libc::ifaddrs = std::ptr::null_mut();
 
@@ -49,17 +61,7 @@ pub(crate) fn interfaces(sc_types: &ScTypes) -> Result<Vec<Interface>, PlatformE
         ));
     }
 
-    struct HeadGuard(*mut libc::ifaddrs);
-    impl Drop for HeadGuard {
-        fn drop(&mut self) {
-            if !self.0.is_null() {
-                // SAFETY: `head` came from `getifaddrs` and has not been freed.
-                unsafe { libc::freeifaddrs(self.0) };
-            }
-        }
-    }
     let guard = HeadGuard(head);
-
     let mut map = links_from_head(guard.0, sc_types);
     let mut orphans = Vec::new();
     attach_addresses(&mut map, &mut orphans)?;
