@@ -325,14 +325,17 @@ mod tests {
 
     #[test]
     fn address_from_bounds_oversized_sockaddr_length() {
-        let mut sockaddr_bytes = vec![0u8; 28];
+        let mut sockaddr_words = [0u16; 14];
+        let sockaddr_bytes = unsafe {
+            std::slice::from_raw_parts_mut(sockaddr_words.as_mut_ptr().cast::<u8>(), 28)
+        };
         sockaddr_bytes[0..2].copy_from_slice(&af::INET.to_ne_bytes());
         sockaddr_bytes[2..4].copy_from_slice(&80u16.to_be_bytes());
         sockaddr_bytes[4..8].copy_from_slice(&[192, 168, 1, 10]);
 
         let unicast = IP_ADAPTER_UNICAST_ADDRESS_LH {
             Address: SOCKET_ADDRESS {
-                lpSockaddr: sockaddr_bytes.as_mut_ptr().cast::<SOCKADDR>(),
+                lpSockaddr: sockaddr_words.as_mut_ptr().cast::<SOCKADDR>(),
                 iSockaddrLength: i32::MAX,
             },
             DadState: 1, // Preferred, not Duplicate
@@ -350,11 +353,11 @@ mod tests {
 
     #[test]
     fn address_from_handles_negative_or_zero_sockaddr_length() {
-        let mut sockaddr_bytes = vec![0u8; 28];
+        let mut sockaddr_words = [0u16; 14];
 
         let mut unicast = IP_ADAPTER_UNICAST_ADDRESS_LH {
             Address: SOCKET_ADDRESS {
-                lpSockaddr: sockaddr_bytes.as_mut_ptr().cast::<SOCKADDR>(),
+                lpSockaddr: sockaddr_words.as_mut_ptr().cast::<SOCKADDR>(),
                 iSockaddrLength: -1,
             },
             DadState: 1,
