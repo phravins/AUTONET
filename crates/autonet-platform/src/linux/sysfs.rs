@@ -18,14 +18,52 @@ use std::path::Path;
 /// Extensions interface, still present for a few legacy drivers). A missing
 /// `/sys` answers "no" rather than failing.
 pub(crate) fn is_wireless(name: &str) -> bool {
+    const PREFIX: &[u8] = b"/sys/class/net/";
+    const PHY: &[u8] = b"/phy80211";
+    const WIRELESS: &[u8] = b"/wireless";
+
     // This builds a filesystem path out of a name, so reject anything that
     // could escape /sys/class/net even though kernel names are well-formed.
     if name.is_empty() || name.contains('/') || name.contains("..") {
         return false;
     }
 
-    let base = Path::new("/sys/class/net").join(name);
-    base.join("phy80211").exists() || base.join("wireless").exists()
+    let name_bytes = name.as_bytes();
+    let suffix_len = PHY.len().max(WIRELESS.len());
+    let needed = PREFIX.len() + name_bytes.len() + suffix_len;
+    if needed > 256 {
+        return false;
+    }
+
+    let mut buf = [0u8; 256];
+    let mut len = 0;
+
+    buf[len..len + PREFIX.len()].copy_from_slice(PREFIX);
+    len += PREFIX.len();
+
+    buf[len..len + name_bytes.len()].copy_from_slice(name_bytes);
+    len += name_bytes.len();
+
+    let phy_start = len;
+    buf[phy_start..phy_start + PHY.len()].copy_from_slice(PHY);
+    let phy_len = phy_start + PHY.len();
+
+    if let Ok(path_str) = std::str::from_utf8(&buf[..phy_len]) {
+        if Path::new(path_str).exists() {
+            return true;
+        }
+    }
+
+    buf[phy_start..phy_start + WIRELESS.len()].copy_from_slice(WIRELESS);
+    let wireless_len = phy_start + WIRELESS.len();
+
+    if let Ok(path_str) = std::str::from_utf8(&buf[..wireless_len]) {
+        if Path::new(path_str).exists() {
+            return true;
+        }
+    }
+
+    false
 }
 
 #[cfg(test)]
