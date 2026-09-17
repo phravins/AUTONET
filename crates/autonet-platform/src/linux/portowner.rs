@@ -13,6 +13,7 @@
 //! either a constant or built from a number that has already been parsed.
 
 use std::net::IpAddr;
+use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::MetadataExt;
 
 use super::procnet::{self, Listener};
@@ -90,8 +91,25 @@ fn pid_owning(inode: u64) -> Option<u32> {
     std::fs::read_dir("/proc")
         .ok()?
         .flatten()
-        .filter_map(|entry| entry.file_name().to_str()?.parse::<u32>().ok())
+        .filter_map(|entry| parse_pid(entry.file_name().as_bytes()))
         .find(|&pid| holds(pid, &target))
+}
+
+/// Parse an ASCII sequence of decimal digits into a PID.
+///
+/// Avoids UTF-8 checks and string allocations for non-numeric directory names in `/proc`.
+fn parse_pid(bytes: &[u8]) -> Option<u32> {
+    if bytes.is_empty() {
+        return None;
+    }
+    let mut pid: u32 = 0;
+    for &b in bytes {
+        if !b.is_ascii_digit() {
+            return None;
+        }
+        pid = pid.checked_mul(10)?.checked_add(u32::from(b - b'0'))?;
+    }
+    Some(pid)
 }
 
 /// Whether process `pid` has a descriptor pointing at `target`.
@@ -152,5 +170,18 @@ mod tests {
     fn a_pid_that_cannot_exist_is_absent_rather_than_a_panic() {
         assert!(command_name(u32::MAX).is_none());
         assert!(!holds(u32::MAX, "socket:[1]"));
+    }
+
+    #[test]
+    fn parse_pid_correctly_parses_pids_and_rejects_invalid_strings() {
+        assert_eq!(parse_pid(b""), None);
+        assert_eq!(parse_pid(b"cpuinfo"), None);
+        assert_eq!(parse_pid(b"self"), None);
+        assert_eq!(parse_pid(b"123a"), None);
+        assert_eq!(parse_pid(b"123"), Some(123));
+        assert_eq!(parse_pid(b"1"), Some(1));
+        assert_eq!(parse_pid(b"65535"), Some(65535));
+        assert_eq!(parse_pid(b"4294967295"), Some(u32::MAX));
+        assert_eq!(parse_pid(b"4294967296"), None);
     }
 }
