@@ -21,9 +21,12 @@
 //! reader cannot misinterpret.
 
 use std::ffi::OsString;
-use std::fs;
-use std::io;
+use std::fs::{self, OpenOptions};
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
 
 use crate::commands::to_json_line;
 use crate::CliError;
@@ -79,8 +82,15 @@ impl StateFile {
     pub(crate) fn write(&self, document: &serde_json::Value) -> io::Result<()> {
         // One line, terminated, exactly as `--json` emits it: a reader that
         // already parses AutoNet's output does not need a second shape for the
-        // same document.
-        fs::write(&self.temporary, to_json_line(document))?;
+        // same document. Restrict file permissions to owner-only (0600 on POSIX)
+        // to prevent unauthorized local users from reading state data.
+        let mut options = OpenOptions::new();
+        options.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        options.mode(0o600);
+
+        let mut file = options.open(&self.temporary)?;
+        file.write_all(to_json_line(document).as_bytes())?;
 
         if let Err(error) = fs::rename(&self.temporary, &self.path) {
             // Otherwise a rename that fails for a durable reason — a
@@ -389,6 +399,32 @@ mod tests {
     fn two_processes_on_one_path_do_not_share_a_temporary() {
         let target = Path::new("/srv/app/current.json");
         assert_ne!(temporary_path(target, 1), temporary_path(target, 2));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn state_file_permissions_are_restricted_to_owner() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let scratch = Scratch::new();
+        let file = create(&scratch.join("current.json"));
+
+        file.write(&selection_document(
+            "linux-netlink",
+            Some(1),
+            Some(&selected()),
+            None,
+            Some(80),
+        ))
+        .expect("write state file");
+
+        let metadata = fs::metadata(file.path()).expect("read metadata");
+        let permissions = metadata.permissions();
+        assert_eq!(
+            permissions.mode() & 0o777,
+            0o600,
+            "state file should have 0600 permissions"
+        );
     }
 
     fn json_number(value: u64) -> Value {
