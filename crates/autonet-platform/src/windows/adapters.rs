@@ -14,7 +14,7 @@ use windows_sys::Win32::NetworkManagement::Ndis::{
     IfOperStatusTesting, IfOperStatusUnknown, IfOperStatusUp,
 };
 use windows_sys::Win32::Networking::WinSock::{
-    IpDadStateDuplicate, IpSuffixOriginRandom, AF_INET, AF_INET6, AF_UNSPEC,
+    IpDadStateDuplicate, IpSuffixOriginRandom, AF_INET, AF_INET6, AF_UNSPEC, SOCKADDR_INET,
 };
 
 use super::iftable::{self, Row};
@@ -291,8 +291,10 @@ fn address_from(unicast: &IP_ADAPTER_UNICAST_ADDRESS_LH) -> Option<Address> {
         return None;
     }
 
-    let len = usize::try_from(socket.iSockaddrLength).ok()?;
-    // SAFETY: Windows supplied this socket address and length.
+    let len = usize::try_from(socket.iSockaddrLength)
+        .ok()?
+        .min(size_of::<SOCKADDR_INET>());
+    // SAFETY: Windows supplied this socket address and length, capped at the max IP sockaddr size.
     let bytes = unsafe { std::slice::from_raw_parts(socket.lpSockaddr.cast::<u8>(), len) };
     let ip = winparse::sockaddr_ip(bytes)?;
 
@@ -305,6 +307,7 @@ fn address_from(unicast: &IP_ADAPTER_UNICAST_ADDRESS_LH) -> Option<Address> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use windows_sys::Win32::Networking::WinSock::{SOCKADDR, SOCKET_ADDRESS};
 
     #[test]
     fn skipped_address_families_are_the_ones_we_never_read() {
@@ -318,5 +321,51 @@ mod tests {
     fn the_buffer_starts_at_the_documented_working_size() {
         assert_eq!(INITIAL_BYTES, 15_000);
         assert!(INITIAL_BYTES.div_ceil(size_of::<u64>()) * size_of::<u64>() >= INITIAL_BYTES);
+    }
+
+    #[test]
+    fn address_from_bounds_oversized_sockaddr_length() {
+        let mut sockaddr_bytes = vec![0u8; 28];
+        sockaddr_bytes[0..2].copy_from_slice(&af::INET.to_ne_bytes());
+        sockaddr_bytes[2..4].copy_from_slice(&80u16.to_be_bytes());
+        sockaddr_bytes[4..8].copy_from_slice(&[192, 168, 1, 10]);
+
+        let unicast = IP_ADAPTER_UNICAST_ADDRESS_LH {
+            Address: SOCKET_ADDRESS {
+                lpSockaddr: sockaddr_bytes.as_mut_ptr().cast::<SOCKADDR>(),
+                iSockaddrLength: i32::MAX,
+            },
+            DadState: 1, // Preferred, not Duplicate
+            SuffixOrigin: 0,
+            OnLinkPrefixLength: 24,
+            ..unsafe { std::mem::zeroed() }
+        };
+
+        let addr = address_from(&unicast);
+        assert!(addr.is_some());
+        let addr = addr.unwrap();
+        assert_eq!(addr.ip, "192.168.1.10".parse::<std::net::IpAddr>().unwrap());
+        assert_eq!(addr.prefix_len, 24);
+    }
+
+    #[test]
+    fn address_from_handles_negative_or_zero_sockaddr_length() {
+        let mut sockaddr_bytes = vec![0u8; 28];
+
+        let mut unicast = IP_ADAPTER_UNICAST_ADDRESS_LH {
+            Address: SOCKET_ADDRESS {
+                lpSockaddr: sockaddr_bytes.as_mut_ptr().cast::<SOCKADDR>(),
+                iSockaddrLength: -1,
+            },
+            DadState: 1,
+            SuffixOrigin: 0,
+            OnLinkPrefixLength: 24,
+            ..unsafe { std::mem::zeroed() }
+        };
+
+        assert!(address_from(&unicast).is_none());
+
+        unicast.Address.iSockaddrLength = 0;
+        assert!(address_from(&unicast).is_none());
     }
 }
