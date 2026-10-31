@@ -62,6 +62,19 @@ mod layout {
     pub(super) const INET6_ADDR: usize = 8;
 }
 
+/// The size of `SOCKADDR_INET`, the largest `sockaddr` a unicast address can be.
+pub(crate) const SOCKADDR_MAX: usize = 28;
+
+/// How many bytes of a `SOCKET_ADDRESS` are safe to read, or `None` if negative.
+///
+/// `iSockaddrLength` comes straight from the OS and sizes a raw slice, so nothing
+/// in the type stops a bad value from reading past the structure. The largest
+/// address we can decode fits in [`SOCKADDR_MAX`], so bytes beyond it are never
+/// needed; a short length stays short, and [`sockaddr_ip`] rejects it.
+pub(crate) fn sockaddr_len(raw: i32) -> Option<usize> {
+    Some(usize::try_from(raw).ok()?.min(SOCKADDR_MAX))
+}
+
 /// The IP address inside a `sockaddr`, or `None` if the bytes cannot hold one.
 ///
 /// The bounds checks are the point: a buffer shorter than the family it claims
@@ -185,6 +198,19 @@ mod tests {
             sockaddr_ip(&sockaddr_in6(octets, 12)),
             Some("fe80::1".parse().unwrap())
         );
+    }
+
+    #[test]
+    fn a_sockaddr_length_is_capped_and_a_negative_one_is_refused() {
+        assert_eq!(sockaddr_len(16), Some(16));
+        assert_eq!(sockaddr_len(0), Some(0));
+        assert_eq!(sockaddr_len(i32::MAX), Some(SOCKADDR_MAX));
+        assert_eq!(sockaddr_len(-1), None);
+    }
+
+    #[test]
+    fn the_capped_sockaddr_length_still_holds_a_whole_ipv6_address() {
+        assert_eq!(sockaddr_in6([0; 16], 0).len(), SOCKADDR_MAX);
     }
 
     #[test]

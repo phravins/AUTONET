@@ -14,7 +14,7 @@ use windows_sys::Win32::NetworkManagement::Ndis::{
     IfOperStatusTesting, IfOperStatusUnknown, IfOperStatusUp,
 };
 use windows_sys::Win32::Networking::WinSock::{
-    IpDadStateDuplicate, IpSuffixOriginRandom, AF_INET, AF_INET6, AF_UNSPEC,
+    IpDadStateDuplicate, IpSuffixOriginRandom, AF_INET, AF_INET6, AF_UNSPEC, SOCKADDR_INET,
 };
 
 use super::iftable::{self, Row};
@@ -25,6 +25,7 @@ use crate::{winroute, PlatformError};
 
 // Keep Linux-testable constants aligned with windows-sys.
 const _: () = {
+    assert!(winparse::SOCKADDR_MAX == size_of::<SOCKADDR_INET>());
     assert!(af::INET == AF_INET);
     assert!(af::INET6 == AF_INET6);
     assert!(oper::UP == IfOperStatusUp);
@@ -291,8 +292,9 @@ fn address_from(unicast: &IP_ADAPTER_UNICAST_ADDRESS_LH) -> Option<Address> {
         return None;
     }
 
-    let len = usize::try_from(socket.iSockaddrLength).ok()?;
-    // SAFETY: Windows supplied this socket address and length.
+    let len = winparse::sockaddr_len(socket.iSockaddrLength)?;
+    // SAFETY: Windows supplied this socket address, and `len` is capped to the
+    // size of the largest one it can be.
     let bytes = unsafe { std::slice::from_raw_parts(socket.lpSockaddr.cast::<u8>(), len) };
     let ip = winparse::sockaddr_ip(bytes)?;
 
