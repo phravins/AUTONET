@@ -639,10 +639,25 @@ Planned, in order:
 
 ## Development
 
+You need [rustup](https://rustup.rs) and nothing else: it reads
+`rust-toolchain.toml` and fetches the right toolchain on the first `cargo`
+command. `nix develop` gives you the same toolchain if you prefer Nix.
+
+```sh
+cargo an status --port 3000                 # run the working tree, no install step
+cargo install --path crates/autonet-cli --locked --force   # put this build on PATH
+```
+
+`cargo an` is an alias from `.cargo/config.toml`. If `autonet --version` does not
+change after reinstalling, an older copy is earlier on your `PATH`: `type -a
+autonet` lists them all.
+
+CI runs these three, and all three must pass on Linux, macOS and Windows:
+
 ```sh
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
-cargo fmt --check
+cargo fmt --all --check
 
 # The live checks, which depend on the machine's actual network:
 cargo test -p autonet-platform -- --ignored --nocapture

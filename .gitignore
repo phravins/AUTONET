@@ -28,3 +28,7 @@ result-*
 /autonet-*.zip
 /autonet-*-*/
 /SHA256SUMS
+
+# One-off experiments at the repository root. A compiled one was committed by
+# accident once, and git history keeps its 4.5 MB for good.
+/scratch_*

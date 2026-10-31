@@ -8,7 +8,6 @@
 mod advertise;
 mod cli;
 mod commands;
-mod autodetect;
 mod doctor;
 mod port;
 mod qr;

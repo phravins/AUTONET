@@ -1,0 +1,4 @@
+# `cargo an status --port 3000` runs the working tree, so trying a change needs
+# no install step and cannot pick up an older `autonet` from PATH.
+[alias]
+an = "run -q -p autonet --"
