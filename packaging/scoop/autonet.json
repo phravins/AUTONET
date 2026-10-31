@@ -17,7 +17,7 @@
         "",
         "  scoop install https://raw.githubusercontent.com/phravins/AUTONET/main/packaging/scoop/autonet.json"
     ],
-    "version": "0.1.0",
+    "version": "0.1.1",
     "description": "Find the LAN address a service is actually reachable on, without hand-editing an IP. Unsigned: Windows SmartScreen may warn on first run.",
     "homepage": "https://github.com/phravins/AUTONET",
     "license": {
@@ -26,7 +26,7 @@
     },
     "architecture": {
         "64bit": {
-            "url": "https://github.com/phravins/AUTONET/releases/download/v0.1.0/autonet-0.1.0-x86_64-pc-windows-msvc.zip",
+            "url": "https://github.com/phravins/AUTONET/releases/download/v0.1.1/autonet-0.1.1-x86_64-pc-windows-msvc.zip",
             "hash": "0000000000000000000000000000000000000000000000000000000000000000"
         }
     },

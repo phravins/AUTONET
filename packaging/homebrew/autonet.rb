@@ -15,28 +15,28 @@
 class Autonet < Formula
   desc "Find the LAN address a service is actually reachable on"
   homepage "https://github.com/phravins/AUTONET"
-  version "0.1.0"
+  version "0.1.1"
   # Matches `license = "Apache-2.0"` in Cargo.toml.
   license "Apache-2.0"
 
   on_macos do
     on_arm do
-      url "https://github.com/phravins/AUTONET/releases/download/v0.1.0/autonet-0.1.0-aarch64-apple-darwin.tar.gz"
+      url "https://github.com/phravins/AUTONET/releases/download/v0.1.1/autonet-0.1.1-aarch64-apple-darwin.tar.gz"
       sha256 "0000000000000000000000000000000000000000000000000000000000000000"
     end
     on_intel do
-      url "https://github.com/phravins/AUTONET/releases/download/v0.1.0/autonet-0.1.0-x86_64-apple-darwin.tar.gz"
+      url "https://github.com/phravins/AUTONET/releases/download/v0.1.1/autonet-0.1.1-x86_64-apple-darwin.tar.gz"
       sha256 "0000000000000000000000000000000000000000000000000000000000000000"
     end
   end
 
   on_linux do
     on_arm do
-      url "https://github.com/phravins/AUTONET/releases/download/v0.1.0/autonet-0.1.0-aarch64-unknown-linux-gnu.tar.gz"
+      url "https://github.com/phravins/AUTONET/releases/download/v0.1.1/autonet-0.1.1-aarch64-unknown-linux-gnu.tar.gz"
       sha256 "0000000000000000000000000000000000000000000000000000000000000000"
     end
     on_intel do
-      url "https://github.com/phravins/AUTONET/releases/download/v0.1.0/autonet-0.1.0-x86_64-unknown-linux-gnu.tar.gz"
+      url "https://github.com/phravins/AUTONET/releases/download/v0.1.1/autonet-0.1.1-x86_64-unknown-linux-gnu.tar.gz"
       sha256 "0000000000000000000000000000000000000000000000000000000000000000"
     end
   end
