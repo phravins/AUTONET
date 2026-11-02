@@ -7,7 +7,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.1"
+version = "0.2.0"
 edition = "2021"
 rust-version = "1.82"
 license = "Apache-2.0"
@@ -18,8 +18,8 @@ homepage = "https://github.com/phravins/AUTONET"
 authors = ["AutoNet contributors"]
 
 [workspace.dependencies]
-autonet-core = { path = "crates/autonet-core", version = "0.1.1" }
-autonet-platform = { path = "crates/autonet-platform", version = "0.1.1" }
+autonet-core = { path = "crates/autonet-core", version = "0.2.0" }
+autonet-platform = { path = "crates/autonet-platform", version = "0.2.0" }
 
 clap = { version = "4", features = ["derive", "wrap_help"] }
 # `autonet run` must survive the signal that stops its child, so it can reap the
