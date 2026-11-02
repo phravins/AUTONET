@@ -338,7 +338,7 @@ mod tests {
     #[test]
     fn a_generated_file_is_skipped_whole() {
         let text = format!("# {}\nAUTONET_IP=192.168.1.20\n", generate::MARKER);
-        assert!(scan_text(&text).is_empty());
+        assert_eq!(scan_text(&text), Vec::<Finding>::new());
     }
 
     #[test]

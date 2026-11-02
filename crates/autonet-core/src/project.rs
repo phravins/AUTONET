@@ -1320,7 +1320,10 @@ mod tests {
             next_dev_origins: true,
             ..facts
         };
-        assert!(notes(detect(&configured), &configured).is_empty());
+        assert_eq!(
+            notes(detect(&configured), &configured),
+            Vec::<String>::new()
+        );
     }
 
     #[test]
@@ -1334,7 +1337,7 @@ mod tests {
             sveltekit_env_declared: true,
             ..facts
         };
-        assert!(notes(detect(&declared), &declared).is_empty());
+        assert_eq!(notes(detect(&declared), &declared), Vec::<String>::new());
     }
 
     #[test]
@@ -1398,6 +1401,6 @@ mod tests {
             android_cleartext: Some(true),
             ..ProjectFacts::default()
         };
-        assert!(notes(detect(&flutter), &flutter).is_empty());
+        assert_eq!(notes(detect(&flutter), &flutter), Vec::<String>::new());
     }
 }

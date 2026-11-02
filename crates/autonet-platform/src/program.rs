@@ -239,7 +239,7 @@ mod tests {
 
     #[test]
     fn a_process_with_no_children_has_no_descendants() {
-        assert!(descendants(" 100 1\n", 100).is_empty());
+        assert_eq!(descendants(" 100 1\n", 100), Vec::<u32>::new());
     }
 
     #[test]

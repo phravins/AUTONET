@@ -238,7 +238,7 @@ mod tests {
     fn the_manifest_parses_back_and_holds_no_address() {
         let text = manifest_text(Some(Kind::Vite), Some(5173), &env_output());
         assert!(text.contains("Detected: Vite."));
-        assert!(crate::ipscan::scan_text(&text).is_empty());
+        assert_eq!(crate::ipscan::scan_text(&text), Vec::new());
 
         let manifest = Manifest::parse(&text).unwrap();
         assert_eq!(manifest.port, Some(5173));
