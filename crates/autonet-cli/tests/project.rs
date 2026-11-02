@@ -147,7 +147,11 @@ fn check_passes_a_project_with_no_addresses_in_it() {
 
     let output = project.autonet(&["check"]);
     assert_eq!(code(&output), 0, "{}", stdout(&output));
-    assert!(stdout(&output).contains("No hardcoded addresses in 1 files"));
+    assert!(stdout(&output).contains("No hardcoded addresses in 1 file."));
+
+    project.write("src/users.js", "fetch(AutoNet.url + '/users')\n");
+    let output = project.autonet(&["check"]);
+    assert!(stdout(&output).contains("No hardcoded addresses in 2 files."));
 }
 
 #[test]

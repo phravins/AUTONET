@@ -240,7 +240,15 @@ fn render(scan: &Scan, root: &Path) -> String {
     use std::fmt::Write as _;
 
     if scan.reports.is_empty() {
-        return format!("No hardcoded addresses in {} files.\n", scan.files_checked);
+        return format!(
+            "No hardcoded addresses in {} {}.\n",
+            scan.files_checked,
+            if scan.files_checked == 1 {
+                "file"
+            } else {
+                "files"
+            },
+        );
     }
 
     let mut out = String::new();
