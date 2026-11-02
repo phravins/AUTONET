@@ -10,9 +10,12 @@ use std::net::IpAddr;
 use autonet_core::model::NetworkState;
 
 pub use crate::change::{change_source, ChangeSource};
+pub use crate::program::{find_program, make_executable, request_stop, resolve_program};
 
 /// Native notification that the network moved, where a platform has one.
 pub mod change;
+
+mod program;
 
 // Shared backend helpers.
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]

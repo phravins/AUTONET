@@ -80,18 +80,7 @@ impl StateFile {
         // One line, terminated, exactly as `--json` emits it: a reader that
         // already parses AutoNet's output does not need a second shape for the
         // same document.
-        fs::write(&self.temporary, to_json_line(document))?;
-
-        if let Err(error) = fs::rename(&self.temporary, &self.path) {
-            // Otherwise a rename that fails for a durable reason — a
-            // cross-device target, a read-only directory — leaves a
-            // half-named file next to the one the user asked for on every
-            // subsequent change.
-            let _ = fs::remove_file(&self.temporary);
-            return Err(error);
-        }
-
-        Ok(())
+        replace_file(&self.path, &self.temporary, &to_json_line(document))
     }
 
     /// Take the file away, because it is no longer being kept current.
@@ -106,6 +95,21 @@ impl StateFile {
     }
 }
 
+/// Replace `path` with `contents` so that a reader sees one or the other, whole.
+pub(crate) fn replace_file(path: &Path, temporary: &Path, contents: &str) -> io::Result<()> {
+    fs::write(temporary, contents)?;
+
+    if let Err(error) = fs::rename(temporary, path) {
+        // Otherwise a rename that fails for a durable reason — a cross-device
+        // target, a read-only directory — leaves a half-named file next to the
+        // one the user asked for on every subsequent change.
+        let _ = fs::remove_file(temporary);
+        return Err(error);
+    }
+
+    Ok(())
+}
+
 /// The sibling path an update is assembled at before being renamed into place.
 ///
 /// A sibling, so the rename stays inside one filesystem — a temporary in
@@ -114,7 +118,7 @@ impl StateFile {
 /// AutoNet processes pointed at one path cannot overwrite each other's partial
 /// writes; the final rename still means last-writer-wins, which is the same
 /// answer either of them would give.
-fn temporary_path(path: &Path, pid: u32) -> PathBuf {
+pub(crate) fn temporary_path(path: &Path, pid: u32) -> PathBuf {
     let mut name = path
         .file_name()
         .map_or_else(|| OsString::from("autonet-state"), OsString::from);

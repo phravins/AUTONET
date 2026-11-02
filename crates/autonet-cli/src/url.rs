@@ -30,7 +30,7 @@ use autonet_core::select::SelectedAddress;
 /// A constant rather than a parameter because nothing in the tool has any way
 /// to know whether the server behind the port speaks TLS. Guessing `https`
 /// from a port number would be a policy decision dressed as a convenience.
-const SCHEME: &str = "http";
+pub(crate) const SCHEME: &str = "http";
 
 /// The URL another device on the network can open.
 ///

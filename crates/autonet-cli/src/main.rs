@@ -6,9 +6,14 @@
 #![allow(clippy::doc_markdown)]
 
 mod advertise;
+mod autodetect;
+mod check;
 mod cli;
 mod commands;
+mod dev;
 mod doctor;
+mod init;
+mod outputs;
 mod port;
 mod qr;
 mod render;
@@ -131,5 +136,11 @@ fn run(cli: &Cli) -> Result<(), CliError> {
         Command::Watch => watch::watch(&ctx, &cli.global),
         Command::Doctor => commands::doctor(&ctx, &cli.global),
         Command::Advertise => advertise::advertise(&ctx, &cli.global),
+        Command::Init { dry_run } => init::init(&ctx, &cli.global, dry_run),
+        Command::Dev {
+            allow_public,
+            no_qr,
+        } => dev::dev(&ctx, &cli.global, allow_public, no_qr),
+        Command::Check { staged } => check::check(&cli.global, staged),
     }
 }

@@ -9,7 +9,11 @@ pub mod classify;
 pub mod config;
 pub mod error;
 pub mod event;
+pub mod generate;
+pub mod ipscan;
 pub mod model;
+pub mod project;
+pub mod scaffold;
 pub mod select;
 
 pub use config::{Config, HostnameConfig, OutputFormat, SelectionConfig};

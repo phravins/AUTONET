@@ -70,6 +70,10 @@ genuinely need a machine live in `crates/autonet-platform/tests/live.rs` and are
 | `select` | Disqualification, then scoring. Returns the winner **and** every candidate with per-rule reasons. |
 | `config` | TOML plus the `AUTONET_*` environment layer. Unknown keys are rejected. |
 | `event` | `NetworkEvent` / `NetworkDiff`, and `diff()`. Read by `autonet watch`, and through it by `autonet advertise`. |
+| `project` | `ProjectFacts` to a `DevPlan` or a refusal: what kind of project this is, what to run, and which files it needs. Also the `autonet.toml` schema. |
+| `generate` | Renders the current address as each generated file format. |
+| `ipscan` | The line scanner behind `autonet check`. |
+| `scaffold` | What `autonet init` would make of a hook, a `.gitignore` or a manifest, given its current text. |
 
 `select` returning the full candidate list rather than just a winner is
 deliberate. It makes `-v` a rendering job, and it will make `autonet doctor` a
@@ -121,6 +125,12 @@ says what moved. Keeping the payload out of the trait is what stops a backend
 becoming a second, divergent account of the network, and it is why an event
 source can only change *when* the pipeline runs, never *what it concludes*.
 
+`program.rs` holds what running someone else's program needs from the operating
+system: finding it on `PATH` (Rust's `Command` does not find an npm `.cmd` shim on
+Windows), stopping it along with everything it started, and marking a hook
+executable. It is here for the same reason as the rest of this crate, which is
+that rule 2 keeps `cfg` out of the CLI.
+
 ### `autonet-cli` (the package is named `autonet`)
 
 Parses flags, layers configuration, takes a snapshot, asks the core, renders.
@@ -128,14 +138,17 @@ Parses flags, layers configuration, takes a snapshot, asks the core, renders.
 screen — `spawn.rs`, `watch.rs`, `advertise.rs` — in modules of their own;
 `render.rs` holds the table and colour machinery. `state.rs` writes the optional
 file `autonet run --state-file` keeps current, and is a consumer of `watch.rs`
-rather than a second detector.
+rather than a second detector. So is `dev.rs`. `autodetect.rs` reads a project
+from disk into the `ProjectFacts` the core decides from, and decides nothing
+itself.
 
 It contains no *discovery* logic and no `#[cfg(target_os)]`: it never asks the
 operating system what the network looks like. There is exactly one place where
 it puts packets on the wire — `advertise.rs` runs an mDNS responder on UDP
-5353 — and one where it writes outside its own output streams — `state.rs`
-writes the path `--state-file` names, and nothing else. Both are worth naming
-here rather than leaving to be discovered.
+5353 — and three where it writes outside its own output streams: `state.rs` writes
+the path `--state-file` names, `outputs.rs` writes the generated files a project's
+plan names, and `init.rs` writes `autonet.toml`, `.gitignore` and a pre-commit hook.
+All of these are worth naming here rather than leaving to be discovered.
 
 It is not the layering breach it first looks like. Discovery is a *question*
 about this machine that three operating systems answer through three unrelated
@@ -219,6 +232,13 @@ block, and note in the release notes that the file needs the newer binary.
   configuration file turns it on, and `hostname.enabled` deliberately has **no**
   environment-variable override. Consent to publish belongs in a file somebody
   wrote and can read back, not in a variable a parent process exported.
+- `autonet dev` makes a dev server reachable from the network, and that is its
+  stated purpose rather than a side effect. It says so before starting anything,
+  and on a publicly routable address it refuses unless given `--allow-public`. See
+  [ADR 0004](adr/0004-project-integration.md).
+- `autonet dev` and `autonet init` write into the project only at the paths its
+  plan names, those paths must stay inside the project, and a file AutoNet did not
+  write is never overwritten.
 
 ### Is advertising the same risk as binding the daemon to `0.0.0.0`?
 
@@ -256,6 +276,7 @@ need not be the system's own, and it is analysed in full in
 | M4 | `autonet watch` — network change events | Built; netlink verified against synthetic interfaces, a real Wi-Fi handover not yet observed |
 | M4a | `autonet advertise` — a `.local` name for the selected address, re-announced through M4's pipeline | Built; record verified locally, resolution from a second device outstanding |
 | M4b | `autonet status --qr` — the network URL as a scannable QR code | Built; phone-camera acceptance outstanding |
+| Stage 5 | `autonet init` / `dev` / `check` — AutoNet inside the project | Built; five web frameworks verified through a network move, other project types and real phones outstanding |
 | M5 | Daemon with a local HTTP API over a Unix socket / named pipe | Planned |
 | M6 | Python, TypeScript, Java and .NET SDKs — thin wrappers, never reimplementations | Planned |
 
@@ -269,4 +290,6 @@ deferred to the name layer — the mDNS crate, the `[hostname]` configuration an
 the advertisement's own security analysis — is settled by
 [ADR 0002](adr/0002-mdns-advertisement.md). The one item *that* record left open
 — what the QR code encodes, and why it is the address rather than the `.local`
-name — is settled by [ADR 0003](adr/0003-qr-code-contents.md).
+name — is settled by [ADR 0003](adr/0003-qr-code-contents.md). Working inside the project being developed — generated files as
+the live channel, and what that does and does not change about ADR 0001 — is settled
+by [ADR 0004](adr/0004-project-integration.md).

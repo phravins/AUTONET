@@ -39,10 +39,10 @@ use crate::{exit, CliError};
 /// Only reached when the signal did *not* arrive through the terminal's process
 /// group — a direct `kill` of the AutoNet process, say — because in that case
 /// the child never saw it and would otherwise be waited on forever.
-const GRACE: Duration = Duration::from_secs(5);
+pub(crate) const GRACE: Duration = Duration::from_secs(5);
 
 /// How often the wait loop wakes to re-check the signal flag.
-const POLL: Duration = Duration::from_millis(50);
+pub(crate) const POLL: Duration = Duration::from_millis(50);
 
 /// Run a command with `AUTONET_*` in its environment.
 pub fn run(
@@ -122,7 +122,7 @@ pub fn run(
     // An argument vector, never a shell string: `program` names a file to
     // execute, and every element of `arguments` reaches it as one argument
     // however it is spelled. Nothing here interprets quotes, globs or `;`.
-    let mut child = StdCommand::new(program)
+    let mut child = StdCommand::new(autonet_platform::resolve_program(program))
         .args(arguments)
         .envs(env_vars(
             &selected,
@@ -311,7 +311,7 @@ fn wait_for(
 /// pure function of two values. `ExitStatus` cannot be constructed portably,
 /// and reaching for one in a test would drag a `cfg` into the CLI that
 /// architecture.md rule 2 keeps out of it.
-fn exit_code(code: Option<i32>, interrupted: bool) -> u8 {
+pub(crate) fn exit_code(code: Option<i32>, interrupted: bool) -> u8 {
     match code {
         // Unix reports no code when a process dies from a signal, and reading
         // *which* signal needs `std::os::unix`, which rule 2 keeps out of the
@@ -336,7 +336,7 @@ fn exit_code(code: Option<i32>, interrupted: bool) -> u8 {
 }
 
 /// Explain a failure to start, distinguishing "no such command" from the rest.
-fn spawn_error(program: &str, error: &std::io::Error) -> CliError {
+pub(crate) fn spawn_error(program: &str, error: &std::io::Error) -> CliError {
     if error.kind() == std::io::ErrorKind::NotFound {
         return CliError::Usage(format!("command not found: {program}"));
     }

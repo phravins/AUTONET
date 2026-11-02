@@ -8,28 +8,33 @@ Before — the line you edit again every time the network changes:
 - const API = "http://192.168.1.42:3000";   // office Wi-Fi, Monday
 - const API = "http://192.168.0.115:3000";  // home, Tuesday
 - const API = "http://172.20.10.4:3000";    // phone hotspot, on the train
-+ const API = `http://${process.env.AUTONET_IP}:3000`;
++ const API = `http://${import.meta.env.VITE_AUTONET_HOST}:3000`;
 ```
 
-After — the address, and the command that keeps it current:
+After — no address in your project, and a commit hook that keeps it that way:
 
 ```console
-$ autonet ip
-192.168.1.101
+$ autonet init       # once: writes autonet.toml, .gitignore and a pre-commit hook
+$ autonet dev        # every day, instead of npm run dev
+Detected Vite
+Writing  .env.development.local
+Read it  import.meta.env.VITE_AUTONET_URL
+Exposes  this dev server to everyone on your network
+Network  http://192.168.1.18:5173
 
-$ autonet run --port 3000 -- npm run dev    # AUTONET_IP set for the child
+  VITE v6.3.5  ready in 188 ms
 
-$ autonet status --port 3000
-AutoNet linux-netlink
+Changed  wlo1 192.168.1.18 -> usb0 172.20.10.4 (default ipv4 route moved from wlo1 to usb0)
+Updated  .env.development.local
+Network  http://172.20.10.4:5173
+Action   The dev server reloads the new values. Open the new URL on your device.
 
-  Address    192.168.1.101/24
-  Interface  wlo1 (wireless, up)
-  Gateway    192.168.1.1
-  Scope      private
-
-  Local      http://127.0.0.1:3000
-  Network    http://192.168.1.101:3000  ← open this from another device
+  [vite] .env.development.local changed, restarting server...
 ```
+
+Your server keeps running through the move. AutoNet rewrites one file, and Vite's
+own reload does the rest. In a terminal, each `Network` line also comes with a QR
+code for your phone.
 
 ---
 
@@ -65,6 +70,166 @@ it returns the one address that works.
 
 If nothing is reachable, it says so and exits non-zero. It does not invent a
 plausible-looking answer.
+
+## Use it in your project
+
+```sh
+cd my-app
+autonet init     # once
+autonet dev      # every day
+```
+
+`autonet init` detects the project, then writes `autonet.toml` (commit it, it holds
+no address), adds the generated file to `.gitignore`, and adds a pre-commit hook.
+Use `--dry-run` to see the changes first. It keeps any hook you already have, and
+never overwrites a file it did not write.
+
+`autonet dev` starts your dev server listening on every interface and writes the
+current address to a file your code reads. When the network changes it rewrites
+that file, prints the new URL and QR code, and tells you what to do next, if
+anything. It works without `init` for projects it can detect.
+
+`autonet check` is what rejects hand-written addresses. It runs from that hook, and
+you should run it in CI too, because a hook only protects the clone it is in:
+
+```console
+$ autonet check
+src/api.js:1:21: 192.168.1.42
+
+1 hardcoded address. This stops working when the network changes.
+Use instead: import.meta.env.VITE_AUTONET_URL
+A real fixed address, such as a router's, can stay: add autonet:allow in a comment on that line.
+```
+
+It exits `1` and it never edits your source, because the right replacement depends
+on the code around it. It ignores loopback, `0.0.0.0`, public and documentation
+addresses, lockfiles, Markdown and other prose, and generated files.
+
+### Web
+
+```js
+// A page served by this dev server
+const self = import.meta.env.VITE_AUTONET_URL;
+// An API on another port of this machine
+const api = `http://${import.meta.env.VITE_AUTONET_HOST}:3000`;
+```
+
+`.env.development.local` is only loaded in development, so a production build sees
+nothing here. Give it a real value: `import.meta.env.VITE_AUTONET_URL ?? "https://api.example.com"`.
+
+### Mobile
+
+A mobile app usually calls an API on your machine. The app has no port of its own
+for AutoNet to detect, so name the API's port in `autonet.toml`, and start the API
+alongside the app:
+
+```toml
+port = 3000
+
+[[background]]
+command = ["npm", "--prefix", "api", "run", "dev"]   # must listen on 0.0.0.0
+
+[[output]]
+format = "dart"
+path = "lib/autonet.g.dart"
+```
+
+```dart
+final api = Uri.parse(AutoNet.url!);
+```
+
+`autonet dev` then runs `flutter run` with your terminal attached. After a network
+change it updates the file and tells you to press `r`.
+
+### Desktop
+
+```js
+// Electron. Set `port` in autonet.toml, or `url` is null.
+const { readFileSync } = require("node:fs");
+const { url } = JSON.parse(readFileSync("autonet.generated.json", "utf8"));
+```
+
+Read the file again whenever you need the address. It is always complete, because
+each update replaces it in one step.
+
+### What each project type gets
+
+| Project | Detected from | Generated file | Read it as | After a network change | Run for real? |
+|---|---|---|---|---|---|
+| Vite | `vite` dependency | `.env.development.local` | `import.meta.env.VITE_AUTONET_URL` | Reloads by itself | Yes, 6.3 |
+| Next.js | `next` dependency | `.env.development.local` | `process.env.NEXT_PUBLIC_AUTONET_URL` | Reloads by itself | Yes, 15.3 and 16.4 |
+| Astro | `astro` dependency | `.env.development.local` | `import.meta.env.PUBLIC_AUTONET_URL` | Reloads by itself | Yes, 5.18 |
+| SvelteKit | `@sveltejs/kit` dependency | `.env.development.local` | `PUBLIC_AUTONET_URL` from `$app/env/public` (Kit 2: `$env/static/public`) | Reloads by itself | Yes, 2.70 and 3.1 |
+| Nuxt | `nuxt` dependency | `autonet.generated.ts` | `AutoNet.url` | Hot reload | Yes, 4.6 |
+| Angular | `@angular/core` dependency | `src/autonet.generated.ts` | `AutoNet.url` | The watcher rebuilds | Not yet |
+| Create React App | `react-scripts` dependency | `src/autonet.generated.ts` or `.js` | `AutoNet.url` | The watcher rebuilds | Not yet |
+| Electron | `electron` dependency | `autonet.generated.json` | The `url` field | Reload the window, or re-read the file | Not yet |
+| Tauri | `src-tauri/` | `autonet.generated.json` | The `url` field | Desktop carries on. For mobile, restart `autonet dev` | Not yet |
+| Expo, React Native | `expo` or `react-native` dependency | `autonet.generated.ts` or `.js` | `AutoNet.url` | Restart `autonet dev`, since Metro advertises the address it started with | Not yet |
+| Flutter | `pubspec.yaml` | `lib/autonet.g.dart` | `AutoNet.url` | Press `r` | Not yet |
+| Android | `build.gradle` | `autonet.properties` | `autonet.url` | Rebuild | Not yet |
+| iOS | `*.xcodeproj` | `Autonet.xcconfig` | `AUTONET_URL` | Rebuild | Not yet |
+| Django | `manage.py` | `.env.autonet` | `AUTONET_URL` | Nothing to do | Not yet |
+
+"Yes" means that version really ran through a network move: the file changed, the
+new address answered with the new value, and the server was never restarted.
+"Not yet" means the generated file has tests, but the toolchain has not run it, and
+no project type has been tried from a real phone. See
+[ADR 0004](docs/adr/0004-project-integration.md#verification).
+
+Everything `autonet dev` starts also gets `AUTONET_IP`, `AUTONET_HOST` and, with a
+port, `AUTONET_URL` in its environment. These are fixed when it starts, so use the
+file for anything that must follow a move.
+
+### When it cannot detect your project
+
+It never guesses a command. If the `dev` script is not plainly the framework's own
+command, or the project is not one it knows, it refuses and shows the
+`autonet.toml` to write:
+
+```toml
+command = ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+port = 8000
+
+[[background]]                   # optional, and repeatable
+command = ["npm", "run", "worker"]
+
+[[output]]                       # optional, and repeatable
+format = "env"                   # env | ts | js | json | dart | properties | xcconfig
+path = ".env.autonet"            # relative, and inside the project
+prefix = "PUBLIC_"               # env only
+```
+
+Unknown keys are rejected. AutoNet cannot see what a declared command binds, so it
+has to listen on `0.0.0.0` itself.
+
+### What it cannot do
+
+- **The two devices must be able to reach each other.** Both on one Wi-Fi works, and
+  so does a phone on your laptop's hotspot or a laptop on your phone's. A phone on
+  mobile data cannot reach a laptop on Wi-Fi without a tunnel, which AutoNet does
+  not provide. Networks with client isolation, common on guest and office Wi-Fi,
+  block this too, and AutoNet cannot always tell.
+- **Android and iOS block plain `http://` by default.** AutoNet tells you the
+  debug-only setting to add and does not change it for you.
+- **The Android emulator is not on your network.** It reaches your machine at
+  `10.0.2.2`, so use that address there. Over USB, use `adb reverse tcp:3000 tcp:3000`.
+- **A firewall can still block the port.** AutoNet never changes firewall rules.
+- **Next.js 16 refuses dev assets and hot reload to other devices** until you add
+  `allowedDevOrigins: ['192.168.*.*', '10.*.*.*', '172.*.*.*']` to `next.config`.
+  AutoNet tells you, and stops once it is there.
+- **SvelteKit 3 hides undeclared variables**, and the value comes out empty with no
+  error. Add `export const variables = defineEnvVars({ PUBLIC_AUTONET_URL: { public: true } })`
+  to `src/env.js` or `src/env.ts`. AutoNet tells you this too.
+- **Django answers `400` for unknown hosts.** Set `ALLOWED_HOSTS = ["*"]` for
+  development only.
+- **Generated files exist only where AutoNet has run.** They are gitignored, so a
+  fresh clone or a CI job has none until `autonet init` or `autonet dev` runs, and
+  code importing one will not build until then. They stay in place when `autonet
+  dev` exits, because your source imports them.
+- **It exposes your dev server to your whole network**, which is what lets a phone
+  reach it. On a publicly routable address it refuses to start unless you pass
+  `--allow-public`.
 
 ## Install
 
@@ -134,6 +299,9 @@ cargo install --path crates/autonet-cli     # the package is named `autonet`
 
 | Command | What it prints |
 |---|---|
+| `autonet init` | Sets a project up once: `autonet.toml`, `.gitignore` and a pre-commit hook. `--dry-run` shows the changes without making them. |
+| `autonet dev` | Runs the project with its dev server reachable from other devices, and keeps its generated address file current. See [Use it in your project](#use-it-in-your-project). |
+| `autonet check` | Reports addresses written by hand into the project, and exits `1` if there are any. `--staged` reads what is about to be committed. |
 | `autonet status` | The selected address, its interface, gateway and scope. The default when no command is given. |
 | `autonet ip` | The bare address and nothing else, for `$(...)` substitution — or, with `-p`, the URL to open. |
 | `autonet interfaces` | Every interface, classified, with its addresses. |
@@ -222,11 +390,11 @@ Exit codes:
 | Code | Meaning |
 |---|---|
 | `0` | An address was selected. For `doctor`, nothing failed — warnings included. For `run`, the command itself exited `0`. |
-| `1` | Nothing usable — the machine may simply be offline. Not a malfunction. For `doctor`, at least one check failed. |
+| `1` | Nothing usable — the machine may simply be offline. Not a malfunction. For `doctor`, at least one check failed. For `check`, it found a hardcoded address. |
 | `2` | AutoNet could not do its job: the OS could not be queried, the configuration is invalid, or the command asked for something that does not exist. |
 
-`autonet run` otherwise exits with the exit code of the command it ran, which
-may be any value — `autonet run -- make test` returning `2` is the tests
+`autonet run` and `autonet dev` otherwise exit with the exit code of the command
+they ran, which may be any value — `autonet run -- make test` returning `2` is the tests
 failing, not AutoNet.
 
 ### Following the network as it changes
@@ -252,7 +420,7 @@ $ autonet watch --json
 ```
 
 This is the same change pipeline `autonet advertise` republishes through, and
-the same one `autonet run --state-file` writes from.
+the same one `autonet run --state-file` and `autonet dev` write from.
 
 ### Staying live across a network change
 
@@ -621,6 +789,8 @@ Shipped:
   does not
 - **Stage 4** release archives for five targets, and one-command installers for
   Linux, macOS and Windows
+- **Stage 5** `autonet init`, `dev` and `check` — AutoNet inside the project, with
+  the address in a generated file and hand-written ones rejected at commit
 
 Built, but not yet signed off on real hardware — these are honest gaps, not
 formalities:
@@ -631,6 +801,9 @@ formalities:
   interfaces the tests use
 - **M4a** a second device resolving the published `.local` name
 - **M4b** a phone camera actually scanning the code
+- **Stage 5** Angular, Create React App, Electron, Tauri, Expo, React Native,
+  Flutter, native Android and iOS, and Django through a real network move, and any
+  of it from a real phone
 
 Planned, in order:
 

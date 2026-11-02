@@ -25,8 +25,12 @@ It ignores Docker bridges, veth pairs, virtual machine networks, link-local \
 addresses and, by default, VPN tunnels, so that switching between Wi-Fi, \
 Ethernet and a hotspot does not require editing any source code.
 
-Every command accepts --json, which is the intended way to consume AutoNet \
-from another language."
+Inside a project, `autonet init` once and then `autonet dev` every day: the \
+project reads its address from a generated file, and nothing in its source \
+names an IP. `autonet check` rejects any that gets written by hand.
+
+The commands that report something accept --json, which is the intended way to \
+consume AutoNet from another language."
 )]
 pub struct Cli {
     /// What to do. Defaults to `status`.
@@ -44,7 +48,7 @@ impl Cli {
     }
 }
 
-/// The M1 command set plus `run`, `doctor` and `watch`.
+/// Every command AutoNet has.
 #[derive(Debug, Clone, Subcommand)]
 pub enum Command {
     /// Show the selected address and how it was chosen.
@@ -259,6 +263,90 @@ and the name is what stays true instead.
 When no address is selectable the record is withdrawn rather than left \
 pointing somewhere stale. On Ctrl-C it is withdrawn and the process exits 0.")]
     Advertise,
+
+    /// Set a project up so that nothing in it names an IP address.
+    #[command(long_about = "\
+Detect the project in this directory and set it up, once. Prints each change \
+as it makes it, and is safe to run again.
+
+    autonet init
+    autonet init --dry-run
+
+It writes autonet.toml, which holds no address and is meant to be committed; \
+adds the generated address file to .gitignore and creates it; and adds a Git \
+pre-commit hook that runs autonet check.
+
+An existing hook is kept, and the check goes in at the top of it. A hook in \
+another language, or a hooks directory another tool manages, is left alone and \
+the lines to add are printed instead.
+
+It also prints what the platform will block on its own and AutoNet will not \
+change for you, such as Android refusing plain http://.")]
+    Init {
+        /// Print what would change, and change nothing.
+        #[arg(long)]
+        dry_run: bool,
+    },
+
+    /// Run the project, and keep its address file current as the network moves.
+    #[command(long_about = "\
+Start this project's dev server listening on every interface, write the address \
+file its code reads, and rewrite that file whenever the network changes.
+
+    autonet dev
+
+THIS EXPOSES THE DEV SERVER to everyone on your network, which is what lets a \
+phone reach it. On a publicly routable address it refuses to start, because \
+there that means the internet; --allow-public overrides that. If the address \
+becomes public while running, AutoNet warns and does not stop your program.
+
+AutoNet never restarts the program. It rewrites the file, the framework's own \
+reload picks it up, and AutoNet says what if anything you have to do: press r \
+for Flutter, rebuild for native Android and iOS, nothing for most web projects. \
+With no network, the last values stay in the file, marked offline.
+
+The file stays when this exits, because the project's source imports it. A file \
+at that path that AutoNet did not write is never overwritten.
+
+What to run is detected from the project, and never guessed: a dev script that \
+is not plainly the framework's own command is refused, with the autonet.toml \
+that would declare it. The two devices still have to be able to reach each \
+other. A phone on mobile data cannot reach a laptop on Wi-Fi.")]
+    Dev {
+        /// Start even though the selected address is reachable from the internet.
+        #[arg(long)]
+        allow_public: bool,
+
+        /// Do not print QR codes.
+        #[arg(long)]
+        no_qr: bool,
+    },
+
+    /// Report IP addresses written by hand into this project.
+    #[command(long_about = "\
+Scan the project for private-range IP addresses in its files and report each \
+one as file:line, with what to use instead. Exits 1 if it finds any.
+
+    autonet check
+    autonet check --staged
+    autonet check --json
+
+Reads the files Git knows about and any untracked ones it does not ignore, or \
+outside Git, walks the directory and skips dependencies and build output. \
+--staged reads what is about to be committed instead, which is what the hook \
+from autonet init runs.
+
+Ignored: loopback, 0.0.0.0, public and documentation addresses, network ranges, \
+version numbers, lockfiles, prose such as Markdown, and generated files.
+
+A real fixed address, such as a router's, can stay: put autonet:allow in a \
+comment on the same line. It never edits source code, because the right \
+replacement depends on the code around it.")]
+    Check {
+        /// Check what is staged for commit instead of the working tree.
+        #[arg(long)]
+        staged: bool,
+    },
 }
 
 /// Flags accepted before or after any subcommand.
