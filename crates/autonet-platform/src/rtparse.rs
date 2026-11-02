@@ -1077,7 +1077,7 @@ mod tests {
     #[test]
     fn an_empty_dump_is_no_routes_rather_than_an_error() {
         // Airplane mode: the sysctl succeeds and returns nothing.
-        assert!(routes(&[], Family::V4, &no_metrics()).is_empty());
+        assert_eq!(routes(&[], Family::V4, &no_metrics()), Vec::<Route>::new());
     }
 
     #[test]

@@ -195,12 +195,13 @@ mod tests {
 
     #[test]
     fn a_truncated_or_scrambled_row_is_skipped_rather_than_guessed_at() {
-        assert!(listeners("   0: 0100007F:AA4B 00000000:0000 0A").is_empty());
-        assert!(listeners("").is_empty());
+        let none = Vec::<Listener>::new();
+        assert_eq!(listeners("   0: 0100007F:AA4B 00000000:0000 0A"), none);
+        assert_eq!(listeners(""), none);
         // Right length, not hex: `from_str_radix` would take the leading `+`.
-        assert!(listeners(
-            "   0: +100007F:AA4B 00000000:0000 0A 0:0 0:0 0 1000 0 1 1 0 100 0 0 10 0"
-        )
-        .is_empty());
+        assert_eq!(
+            listeners("   0: +100007F:AA4B 00000000:0000 0A 0:0 0:0 0 1000 0 1 1 0 100 0 0 10 0"),
+            none
+        );
     }
 }

@@ -144,7 +144,7 @@ mod tests {
         // `comm` for the test binary is whatever cargo named it; that it is
         // present and trimmed is all that is portable enough to assert.
         let name = command_name(std::process::id()).expect("a name for this process");
-        assert!(!name.is_empty());
+        assert_ne!(name, "");
         assert_eq!(name.trim(), name, "the trailing newline should be gone");
     }
 
